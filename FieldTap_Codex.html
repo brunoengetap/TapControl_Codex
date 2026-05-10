@@ -1014,7 +1014,8 @@ async function selectOS(id) {
 
   // S5: Se a OS está na Fase 2, redireciona para o checklist de retorno
   const fase = String(SES.os?.fase_atual || '1');
-  if (fase === '2') {
+  const st = String(SES.os?.status || '').toLowerCase();
+  if (fase === '2' || st === 'fase 2') {
     await entrarFase2(id);
     return;
   }
@@ -1634,14 +1635,21 @@ async function entrarFase2(idOS) {
 
   // Tenta buscar itens do GAS
   let itens = [];
+  const podeDemo = !GAS_URL;
   try {
     const r = await gasGet('getItensByOS', { id_os: idOS, status: 'em_campo_f2' });
     if (r.status === 'ok' && r.itens?.length) itens = r.itens;
   } catch(e) {}
 
-  // Fallback demo se não trouxe nada
-  if (!itens.length) {
+  if (!itens.length && podeDemo) {
     itens = getDemoItensF2(idOS);
+  } else if (!itens.length) {
+    hideLoading();
+    document.getElementById('tf2-body').innerHTML = '<div class="empty-state"><div class="ei">📭</div>Nenhum item de Fase 2 recebido para esta OS. Verifique no TapParts se a OS foi enviada para campo.</div>';
+    document.getElementById('tf2-progress-txt').textContent = '0 de 0 itens concluídos';
+    document.getElementById('tf2-progress-bar').style.width = '0%';
+    goTo('tf2');
+    return;
   }
 
   // Adicionar campo de controle local
