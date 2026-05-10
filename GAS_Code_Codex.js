@@ -232,6 +232,8 @@ function doGet(e) {
       case 'getLevantamentosByOS':      resultado = getLevantamentosByOS(params);      break;
       case 'getItensByLevantamento':    resultado = getItensByLevantamento(params);    break;
       case 'getItensByOS':              resultado = getItensByOS(params);              break;
+      case 'getTecnicosCampo':          resultado = getTecnicosCampo(params);          break;
+      case 'getInspetores':             resultado = getTecnicosCampo(params);          break;
       // Sprint 6 — Histórico
       case 'getHistoricoOS':            resultado = getHistoricoOS(params);            break;
       case 'getHistoricoItens':         resultado = getHistoricoItens(params);         break;
@@ -261,6 +263,8 @@ function doPost(e) {
       case 'registrarCalibracao':           resultado = registrarCalibracao(body);           break;
       case 'registrarInstalacao':           resultado = registrarInstalacao(body);           break;
       case 'avancarFaseOS':                 resultado = avancarFaseOS(body);                 break;
+      case 'salvarTecnicoCampo':            resultado = salvarTecnicoCampo(body);            break;
+      case 'toggleAtivoTecnicoCampo':       resultado = toggleAtivoTecnicoCampo(body);       break;
       // Sprint 6 — Histórico
       case 'encerrarOSHistorico':           resultado = encerrarOSHistorico(body);           break;
       case 'salvarItemCatalogo':            resultado = salvarItemCatalogo(body);            break;
@@ -311,12 +315,30 @@ function getOS(params) {
   var lista = [];
   for (var i = 1; i < dados.length; i++) {
     var obj = _linhaParaObjeto(cab, dados[i]);
-    if (String(obj.status).toLowerCase() === 'ativa') {
+    var st = String(obj.status || '').toLowerCase();
+    if (st !== 'encerrada' && st !== 'encerrado' && st !== 'finalizada' && st !== 'cancelada') {
       obj.total_equipamentos = _contarEquipamentosDaOS(ss, obj.id_os);
       lista.push(obj);
     }
   }
   return { status: 'ok', os: lista };
+}
+
+function getTecnicosCampo(params) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var aba = ss.getSheetByName('CAT_INSPETORES');
+  var dados = aba.getDataRange().getValues();
+  var cab = dados[0];
+  var lista = [];
+  for (var i = 1; i < dados.length; i++) {
+    var obj = _linhaParaObjeto(cab, dados[i]);
+    lista.push({
+      id: obj.id,
+      nome: obj.nome,
+      ativo: String(obj.ativo).toLowerCase() === 'true'
+    });
+  }
+  return { status: 'ok', tecnicos: lista };
 }
 
 function getOSByCliente(params) {
@@ -850,6 +872,7 @@ function registrarInstalacao(body) {
 function avancarFaseOS(body) {
   if (!body.id_os)    return _erro('CAMPO_OBRIGATORIO', 'id_os é obrigatório.');
   if (!body.nova_fase) return _erro('CAMPO_OBRIGATORIO', 'nova_fase é obrigatório.');
+  if (String(body.nova_fase) !== '2') return _erro('FASE_INVALIDA', 'Somente avanço para fase 2 é suportado nesta ação.');
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var lock = LockService.getScriptLock();
   try {
@@ -857,11 +880,31 @@ function avancarFaseOS(body) {
     var aba = ss.getSheetByName('OS');
     var dados = aba.getDataRange().getValues();
     var cab = dados[0];
+    var abaItens = ss.getSheetByName('ITENS');
+    var dItens = abaItens.getDataRange().getValues();
+    var cabItens = dItens[0];
+    var colItemOS = cabItens.indexOf('id_os');
+    var colItemStatus = cabItens.indexOf('status');
+    var colItemTs = cabItens.indexOf('timestamp_atualizacao');
+    var agora = new Date();
+    var itensEnviados = 0;
     var colFase   = cab.indexOf('fase_atual');
     var colStatus = cab.indexOf('status');
     for (var i = 1; i < dados.length; i++) {
       if (String(dados[i][0]) === String(body.id_os)) {
-        var novaFaseStr = String(body.nova_fase);
+        var novaFaseStr = '2';
+        for (var j = 1; j < dItens.length; j++) {
+          if (String(dItens[j][colItemOS]) === String(body.id_os) && String(dItens[j][colItemStatus]) === 'pronto_campo') {
+            abaItens.getRange(j+1, colItemStatus+1).setValue('em_campo_f2');
+            if (colItemTs >= 0) abaItens.getRange(j+1, colItemTs+1).setValue(agora);
+            ss.getSheetByName('HISTORICO_STATUS').appendRow([
+              _gerarIdHistorico(ss), dItens[j][0], 'pronto_campo', 'em_campo_f2',
+              body.responsavel || '', body.observacao || 'Envio para Fase 2', agora
+            ]);
+            itensEnviados++;
+          }
+        }
+        if (!itensEnviados) return _erro('SEM_ITENS_PRONTOS_CAMPO', 'Nenhum item pronto para campo nesta OS.');
         aba.getRange(i+1, colFase+1).setValue(novaFaseStr);
         // Atualiza coluna status para refletir o estado visual
         if (colStatus >= 0) {
@@ -877,11 +920,62 @@ function avancarFaseOS(body) {
         }
         SpreadsheetApp.flush();
         registrarEventoOperacional({ tipo_evento: 'AVANCO_FASE_OS', id_os: body.id_os, numero_os: body.id_os, acao_realizada: 'Fase da OS avançada para ' + novaFaseStr, responsavel_nome: body.responsavel || 'adm', origem: body.origem || 'TapParts', observacao: body.observacao || '' });
-        return { status: 'ok', id_os: body.id_os, fase_atual: novaFaseStr };
+        return { status: 'ok', id_os: body.id_os, fase_atual: 2, itens_enviados_fase2: itensEnviados };
       }
     }
     return _erro('ITEM_NAO_ENCONTRADO', 'OS não encontrada: ' + body.id_os);
   } finally { lock.releaseLock(); }
+}
+
+function salvarTecnicoCampo(body) {
+  if (!body.nome) return _erro('CAMPO_OBRIGATORIO', 'nome é obrigatório.');
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var aba = ss.getSheetByName('CAT_INSPETORES');
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+    var dados = aba.getDataRange().getValues();
+    var cab = dados[0];
+    var colAtivo = cab.indexOf('ativo');
+    var colNome = cab.indexOf('nome');
+    var colHash = cab.indexOf('pin_hash');
+    var ativo = body.ativo === undefined ? true : !!body.ativo;
+    if (body.id) {
+      for (var i = 1; i < dados.length; i++) {
+        if (String(dados[i][0]) === String(body.id)) {
+          aba.getRange(i+1, colNome+1).setValue(body.nome);
+          aba.getRange(i+1, colAtivo+1).setValue(String(ativo));
+          if (body.pin && String(body.pin).trim()) {
+            if (!/^\d{4}$/.test(String(body.pin))) return _erro('PIN_INVALIDO', 'PIN deve ter 4 dígitos numéricos.');
+            aba.getRange(i+1, colHash+1).setValue(_hashPin(String(body.pin)));
+          }
+          return { status: 'ok', modo: 'atualizado', id: body.id };
+        }
+      }
+      return _erro('ITEM_NAO_ENCONTRADO', 'Técnico não encontrado: ' + body.id);
+    }
+    if (!body.pin || !/^\d{4}$/.test(String(body.pin))) return _erro('PIN_INVALIDO', 'PIN deve ter 4 dígitos numéricos.');
+    var novoId = _gerarId(ss, 'CAT_INSPETORES', 'INS');
+    aba.appendRow([novoId, body.nome, _hashPin(String(body.pin)), String(ativo)]);
+    return { status: 'ok', modo: 'criado', id: novoId };
+  } finally { lock.releaseLock(); }
+}
+
+function toggleAtivoTecnicoCampo(body) {
+  if (!body.id) return _erro('CAMPO_OBRIGATORIO', 'id é obrigatório.');
+  if (body.ativo === undefined) return _erro('CAMPO_OBRIGATORIO', 'ativo é obrigatório.');
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var aba = ss.getSheetByName('CAT_INSPETORES');
+  var dados = aba.getDataRange().getValues();
+  var cab = dados[0];
+  var colAtivo = cab.indexOf('ativo');
+  for (var i = 1; i < dados.length; i++) {
+    if (String(dados[i][0]) === String(body.id)) {
+      aba.getRange(i+1, colAtivo+1).setValue(String(!!body.ativo));
+      return { status: 'ok', id: body.id, ativo: !!body.ativo };
+    }
+  }
+  return _erro('ITEM_NAO_ENCONTRADO', 'Técnico não encontrado: ' + body.id);
 }
 
 function salvarItemCatalogo(body) {

@@ -192,7 +192,11 @@ body { background: var(--bg); color: var(--text); font-family: var(--body); font
 .topbar-actions { display: flex; gap: 8px; }
 
 /* ── BUTTONS ── */
-.btn { display: inline-flex; align-items: center; gap: 6px; border: none; border-radius: 8px; cursor: pointer; font-family: var(--body); font-size: 13px; font-weight: 600; padding: 8px 16px; transition: opacity .15s; }
+.btn { display: inline-flex; align-items: center; gap: 6px; border: none; border-radius: 8px; cursor: pointer; font-family: var(--body); font-size: 13px; font-weight: 600; padding: 8px 16px; transition: opacity .15s, transform .08s, box-shadow .15s; }
+.btn:active { transform: scale(.96); }
+.btn.loading { opacity:.72; cursor:progress; pointer-events:none; }
+.btn.loading::after { content:""; width:12px; height:12px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:spin .7s linear infinite; }
+.btn.flash { box-shadow:0 0 0 3px rgba(14,165,233,.22); }
 .btn:hover { opacity: .85; }
 .btn-primary { background: var(--accent); color: #fff; }
 .btn-ghost { background: var(--surf2); color: var(--text2); border: 1px solid var(--border); }
@@ -458,8 +462,8 @@ code { font-size: 11px; color: var(--accent); font-family: monospace; }
   <div class="topbar">
     <div class="topbar-title" id="topTitle">Dashboard</div>
     <div class="topbar-actions">
-      <button class="btn btn-ghost" onclick="syncGAS()" title="Sincronização completa com o banco de dados (GAS)">🔄 Sincronizar GAS</button>
-      <button class="btn btn-primary" id="btnTopNew" onclick="topNew()">🔄 Atualizar</button>
+      <button class="btn btn-ghost" id="btnSyncGas" onclick="syncGASWithFeedback(this)" title="Sincronização completa com o banco de dados (GAS)">🔄 Sincronizar GAS</button>
+      <button class="btn btn-primary" id="btnTopNew" onclick="topNewWithFeedback(this)">🔄 Atualizar</button>
     </div>
   </div>
 
@@ -1350,6 +1354,7 @@ let DB = {
   equipamentos: [],
   levantamentos: [],
   itens: [],
+  tecnicos: [],
   catalogo: {
     manometro: [],
     valvula: [],
@@ -1495,12 +1500,13 @@ async function syncGAS() {
   }
   setGASStatus('spin', 'Sincronizando…');
   try {
-    const [clis, oss, equips, cats, kitsResp] = await Promise.all([
+    const [clis, oss, equips, cats, kitsResp, tecs] = await Promise.all([
       gasGet('getClientes'),
       gasGet('getOS'),
       gasGet('getEquipamentosAll'),
       gasGet('getCatalogos'),
       gasGet('getKitsByBitola', { bitola: 'todos' }),
+      gasGet('getTecnicosCampo'),
     ]);
     if (clis.status === 'ok') DB.clientes = clis.clientes;
     if (oss.status === 'ok')  DB.os = oss.os;
@@ -1521,6 +1527,7 @@ async function syncGAS() {
         ativo: String(k.ativo) === 'true'
       }));
     }
+    if (tecs.status === 'ok') DB.tecnicos = tecs.tecnicos || [];
     setGASStatus('ok', 'GAS conectado ✓');
     await syncLevantamentos();
     await syncItens();
@@ -2624,7 +2631,7 @@ function renderDashboard() {
   document.getElementById('dash-os-list').innerHTML = osAtArr.length
     ? osAtArr.map(o => {
         const oItens = itens.filter(i => i.id_os === o.id_os);
-        const pct = oItens.length ? Math.round(oItens.filter(i=>i.status==='concluido').length / oItens.length * 100) : 0;
+        const pct = calcularProgressoOS(o.id_os);
         return `<div class="dash-item">
           <div>
             <div class="dash-item-label">OS ${o.numero_os} — ${o.cliente}</div>
@@ -2640,6 +2647,14 @@ function renderDashboard() {
         </div>`;
       }).join('')
     : '<div style="color:var(--text2);font-size:13px;padding:10px 0">Nenhuma OS em andamento</div>';
+}
+
+function calcularProgressoOS(idOS) {
+  const pesos = { aguardando_cotacao:5, cotado:15, proposta_erp:25, aprovado_cliente:35, em_compra:50, pecas_recebidas:65, pronto_campo:75, em_campo_f2:80, em_calibracao:80, instalado_campo:90, instalado:90, calibrado:90, concluido:100, reprovado_cliente:100, cancelado:100 };
+  const itens = (DB.itens || []).filter(i => i.id_os === idOS);
+  if (!itens.length) return 0;
+  if (itens.every(i => ['concluido','instalado','reprovado_cliente','cancelado'].includes(i.status))) return 100;
+  return Math.round(itens.reduce((a,i)=>a+(pesos[i.status] ?? 0),0) / itens.length);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2751,6 +2766,11 @@ async function avancarStatus(itemId, novoStatus) {
 
   item.status = novoStatus;
 
+  if (novoStatus === 'pronto_campo') {
+    setTimeout(() => abrirModalFase2(item.id_os), 50);
+  }
+
+  renderOS();
   renderPipeline();
   renderDashboard();
   updateBadges();
@@ -3364,8 +3384,30 @@ function setView(id, el) {
 function topNew() {
   const active = document.querySelector('.view.active');
   const id = active?.id?.replace('view-', '');
-  VIEW_CONFIG[id]?.newFn();
+  if (!VIEW_CONFIG[id]?.newFn) { showToast('Nenhuma ação principal disponível nesta tela.', 'warn'); return; }
+  VIEW_CONFIG[id].newFn();
 }
+
+async function withButtonFeedback(btnOrId, fn, loadingText) {
+  const btn = typeof btnOrId === 'string' ? document.getElementById(btnOrId) : btnOrId;
+  if (!btn) return Promise.resolve(fn());
+  const original = btn.innerHTML;
+  try {
+    btn.classList.add('loading');
+    if (loadingText) btn.textContent = loadingText;
+    await Promise.resolve(fn());
+    btn.classList.add('flash');
+    setTimeout(() => btn.classList.remove('flash'), 350);
+  } catch (e) {
+    showToast('Erro: ' + (e?.message || e), 'err');
+    throw e;
+  } finally {
+    btn.classList.remove('loading');
+    btn.innerHTML = original;
+  }
+}
+async function syncGASWithFeedback(btn){ await withButtonFeedback(btn, async()=>{ await syncGAS(); }, 'Sincronizando...'); }
+async function topNewWithFeedback(btn){ await withButtonFeedback(btn, async()=>{ await topNew(); }, 'Atualizando...'); }
 
 // ── TOAST ─────────────────────────────────────────────────────
 let _tt;
@@ -3487,7 +3529,9 @@ async function confirmarFase2() {
   closeModal('modal-fase2');
   renderOS();
   if (DB.itens) renderPipeline();
-  showToast('✅ Fase 2 aberta — FieldTap atualizado');
+  renderDashboard();
+  updateBadges();
+  showToast('✅ Fase 2 aberta — OS disponível no FieldTap');
 }
 
 // Sprint 6: encerrarOS agora abre modal com opções de faturamento
