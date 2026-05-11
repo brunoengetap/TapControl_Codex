@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>FieldTap S13 — Engetap</title>
+<title>FieldTap S13.1 — hotfix EQUIP_ICON — Engetap</title>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -270,7 +270,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
     <div class="pin-logo">
       <div class="pl-badge">FIELD</div>
       <div class="pl-name">Tap</div>
-      <div class="pl-sub">Engetap · S13</div>
+      <div class="pl-sub">Engetap · S13.1</div>
     </div>
     <div class="pin-dots" id="pinDots">
       <div class="pin-dot" id="pd0"></div>
@@ -767,7 +767,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbzUFHKIWPWC9EnrQyk-5GaWJ6BgeFdIQ5FLeFo4UAfKP4Qx86b2jM52yWgG-XpIz86Y/exec';
 
 // Correção S12 — versionamento
-const APP_VERSION = 'S13';
+const APP_VERSION = 'S13.1';
 
 // ════════════════════════════════════════════════════════════════
 // ESTADO DA SESSÃO
@@ -1276,6 +1276,29 @@ async function atualizarEquipamentosOS(btn) {
     if (btn) { btn.disabled = false; btn.textContent = '🔄 Atualizar equipamentos'; }
   }
 }
+
+
+const EQUIP_ICON = {
+  vaso: '🔵',
+  caldeira: '🔥',
+  tubulacao: '〰️',
+  tanque: '🛢️',
+  'Vaso de pressão': '🔵',
+  'Caldeira': '🔥',
+  'Tubulação': '〰️',
+  'Tanque': '🛢️'
+};
+
+const EQUIP_TIPO_LABEL = {
+  vaso: 'Vaso de pressão',
+  caldeira: 'Caldeira',
+  tubulacao: 'Tubulação',
+  tanque: 'Tanque',
+  'Vaso de pressão': 'Vaso de pressão',
+  'Caldeira': 'Caldeira',
+  'Tubulação': 'Tubulação',
+  'Tanque': 'Tanque'
+};
 
 function renderT3() {
   document.getElementById('t3-os-num').textContent = 'OS ' + (SES.os.numero_os || SES.os.id_os);
