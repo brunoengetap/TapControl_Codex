@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TapParts S12 — Engetap</title>
+<title>TapParts S12.1 — hotfix Fase 2 / toast / sync — Engetap</title>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -307,7 +307,8 @@ tr:hover td { background: var(--surf2); }
 .type-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 /* ── TOAST ── */
-#toast { position: fixed; bottom: 24px; right: 24px; background: var(--ok); color: #fff; padding: 10px 18px; border-radius: 8px; font-weight: 600; font-size: 13px; opacity: 0; transition: all .3s; pointer-events: none; z-index: 9999; max-width: 320px; }
+#toast { position: fixed; bottom: 24px; right: 24px; background: var(--ok); color: #fff; padding: 10px 18px; border-radius: 8px; font-weight: 600; font-size: 13px; opacity: 0; transition: all .3s; pointer-events: none; z-index: 12000; max-width: 360px; }
+#toast.action { pointer-events: auto; }
 #toast.show { opacity: 1; }
 #toast.err { background: var(--danger); }
 
@@ -402,7 +403,7 @@ code { font-size: 11px; color: var(--accent); font-family: monospace; }
     <div class="logo-badge">TAP</div>
     <div>
       <div class="logo-name">Parts</div>
-      <div class="logo-sub">Engetap · S12</div>
+      <div class="logo-sub">Engetap · S12.1</div>
     </div>
   </div>
 
@@ -454,7 +455,7 @@ code { font-size: 11px; color: var(--accent); font-family: monospace; }
       <div class="gas-dot spin" id="gasDot"></div>
       <span id="gasLabel">Conectando ao GAS…</span>
     </div>
-    <div style="margin-top:6px;font-size:10px;opacity:.5">TapParts · S12</div>
+    <div style="margin-top:6px;font-size:10px;opacity:.5">TapParts · S12.1</div>
   </div>
 </div>
 
@@ -1419,7 +1420,7 @@ code { font-size: 11px; color: var(--accent); font-family: monospace; }
 // ═══════════════════════════════════════════════════════════════
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbzUFHKIWPWC9EnrQyk-5GaWJ6BgeFdIQ5FLeFo4UAfKP4Qx86b2jM52yWgG-XpIz86Y/exec'; // TODO: colar URL do GAS aqui
 // Correção S12 — versionamento
-const APP_VERSION = 'S12';
+const APP_VERSION = 'S12.1';
 
 // ═══════════════════════════════════════════════════════════════
 // ESTADO LOCAL (banco de dados em memória enquanto GAS não está conectado)
@@ -3212,10 +3213,7 @@ async function avancarStatus(itemId, novoStatus) {
     if (os && !isOSEncerrada(os)) {
       const toastEl = document.getElementById('toast');
       if (toastEl) {
-        toastEl.innerHTML = `✓ Pronto p/ Campo &nbsp;·&nbsp; <span onclick="abrirModalFase2('${item.id_os}')" style="cursor:pointer;text-decoration:underline;font-weight:700">Enviar Fase 2 agora →</span>`;
-        toastEl.className = 'show';
-        if (toastEl._timer) clearTimeout(toastEl._timer);
-        toastEl._timer = setTimeout(() => { toastEl.className = ''; toastEl.innerHTML = ''; }, 6000);
+        showActionToast('✓ Pronto p/ Campo', 'Enviar Fase 2 agora →', () => abrirModalFase2(item.id_os), 6000);
       }
     }
   }
@@ -3844,15 +3842,43 @@ function topNew() {
 
 // ── TOAST ─────────────────────────────────────────────────────
 let _tt;
+function _hideToast() {
+  const t = document.getElementById('toast');
+  if (!t) return;
+  t.className = '';
+  t.textContent = '';
+  t.innerHTML = '';
+  t.onclick = null;
+  clearTimeout(_tt);
+}
 function showToast(msg, type='') {
   const t = document.getElementById('toast');
   t.textContent = msg;
-  t.className = type === 'err' ? 'show err' : type === 'warn' ? 'show' : 'show';
+  t.className = type === 'err' ? 'show err' : 'show';
   if (type === 'err') t.style.background = 'var(--danger)';
   else if (type === 'warn') t.style.background = 'var(--warn)';
   else t.style.background = 'var(--ok)';
+  t.onclick = null;
   clearTimeout(_tt);
-  _tt = setTimeout(() => t.classList.remove('show'), 3500);
+  _tt = setTimeout(_hideToast, 3500);
+}
+function showActionToast(message, actionLabel, actionFn, timeout) {
+  const t = document.getElementById('toast');
+  t.style.background = 'var(--ok)';
+  t.className = 'show action';
+  t.innerHTML = `<span>${message}</span> <button type="button" style="margin-left:8px;background:transparent;border:0;color:#fff;font-weight:700;text-decoration:underline;cursor:pointer">${actionLabel}</button>`;
+  const btn = t.querySelector('button');
+  if (btn) {
+    btn.onclick = function(ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      _hideToast();
+      if (typeof actionFn === 'function') actionFn();
+    };
+  }
+  t.onclick = function(ev) { ev.stopPropagation(); };
+  clearTimeout(_tt);
+  _tt = setTimeout(_hideToast, timeout || 6000);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -3947,67 +3973,51 @@ async function confirmarFase2() {
   if (!idOS) return;
   const obs = document.getElementById('f2-obs').value.trim();
   const tecnicoF2 = document.getElementById('f2-tecnico-sel')?.value || '';
-  const os  = DB.os.find(o => o.id_os === idOS);
+  const btn = document.querySelector('#modal-fase2 .btn-primary');
+  const btnTxt = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Enviando...'; }
 
-  showToast('Abrindo Fase 2…', 'warn');
-
-  // 1. Avança fase_atual da OS para 2 no GAS
-  if (GAS_URL) {
-    try {
+  try {
+    if (GAS_URL) {
       const r = await gasPost('avancarFaseOS', { id_os: idOS, nova_fase: 2, observacao: obs });
-      if (r.status !== 'ok') { showToast('Erro ao avançar fase: ' + (r.mensagem || ''), 'err'); return; }
-    } catch(e) {
-      showToast('Falha na comunicação com GAS', 'err'); return;
+      if (!r || r.status !== 'ok') throw new Error('Erro ao avançar fase da OS.');
+      if (tecnicoF2) {
+        const rt = await gasPost('salvarOS', { id_os: idOS, tecnicos_vinculados: [tecnicoF2] });
+        if (!rt || rt.status !== 'ok') throw new Error('Falha ao vincular técnico da Fase 2.');
+      }
     }
-    // Se escolheu técnico específico, atualiza OS com técnico para fase 2
-    if (tecnicoF2 && GAS_URL) {
-      try {
-        await gasPost('salvarOS', { id_os: idOS, tecnicos_vinculados: [tecnicoF2] });
-      } catch(e) {}
-    }
-  }
 
-  // 2. Atualiza DB local
-  const idx = DB.os.findIndex(o => o.id_os === idOS);
-  if (idx >= 0) {
-    DB.os[idx].status = 'Fase 2';
-    DB.os[idx].fase_atual = 2;
-    if (tecnicoF2) DB.os[idx].tecnicos_vinculados = [tecnicoF2];
-  }
-
-  // 3. Itens pronto_campo → persistir status "em_campo_f2" no GAS e atualizar DB local
-  if (DB.itens) {
-    const prontos = DB.itens.filter(it => it.id_os === idOS && it.status === 'pronto_campo');
+    const prontos = (DB.itens || []).filter(it => it.id_os === idOS && it.status === 'pronto_campo');
     const falhas = [];
     if (GAS_URL && prontos.length) {
-      await Promise.all(prontos.map(async it => {
+      for (const it of prontos) {
         try {
-          const ri = await gasPost('atualizarStatusItem', {
-            id_item: it.id_item,
-            novo_status: 'em_campo_f2',
-            responsavel: 'TapParts',
-            observacao: 'Enviado ao FieldTap na abertura da Fase 2'
-          });
-          if (ri.status !== 'ok') falhas.push(it.id_item);
-          else it.status = 'em_campo_f2';
-        } catch(e) {
-          falhas.push(it.id_item);
-          console.warn('[FASE2] Falha ao atualizar item no GAS:', it.id_item, e.message);
-        }
-      }));
-      if (falhas.length) showToast('⚠ ' + falhas.length + ' item(ns) não puderam ser atualizados no GAS', 'warn');
-    } else {
-      // Sem GAS: atualiza só local
-      prontos.forEach(it => { it.status = 'em_campo_f2'; });
+          const ri = await gasPost('atualizarStatusItem', { id_item: it.id_item, novo_status: 'em_campo_f2', responsavel: 'TapParts', observacao: 'Enviado ao FieldTap na abertura da Fase 2' });
+          if (!ri || ri.status !== 'ok') falhas.push(it.id_item);
+        } catch(e) { falhas.push(it.id_item); }
+      }
     }
+    if (falhas.length) throw new Error('Falha ao enviar item(ns) para Fase 2: ' + falhas.join(', '));
+
+    const idx = DB.os.findIndex(o => o.id_os === idOS);
+    if (idx >= 0) {
+      DB.os[idx].status = 'Fase 2';
+      DB.os[idx].fase_atual = 2;
+      if (tecnicoF2) DB.os[idx].tecnicos_vinculados = [tecnicoF2];
+    }
+    prontos.forEach(it => { it.status = 'em_campo_f2'; });
+
+    closeModal('modal-fase2');
+    renderOS(); renderDashboard(); renderPipeline(); updateBadges();
+    if (GAS_URL) { try { await syncGAS(); } catch(e) {} }
+    showToast('✅ Fase 2 enviada ao FieldTap');
+  } catch (e) {
+    showToast(e.message || 'Erro ao enviar Fase 2 ao FieldTap', 'err');
+    if (btn) { btn.disabled = false; btn.textContent = btnTxt || '🚗 Enviar Fase 2 ao FieldTap'; }
+    return;
   }
 
-  closeModal('modal-fase2');
-  renderOS();
-  renderDashboard();
-  if (DB.itens) renderPipeline();
-  updateBadges();
-  showToast('✅ Fase 2 aberta — FieldTap atualizado' + (tecnicoF2 ? ' para técnico selecionado' : ''));
+  if (btn) { btn.disabled = false; btn.textContent = btnTxt || '🚗 Enviar Fase 2 ao FieldTap'; }
 }
 
 // Sprint 8: retroceder OS de Fase 2 para Fase 1
