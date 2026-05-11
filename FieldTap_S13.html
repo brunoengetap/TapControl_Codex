@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>FieldTap S13.1 — hotfix EQUIP_ICON — Engetap</title>
+<title>FieldTap S13.1 — hotfix refresh / estado OS — Engetap</title>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -1000,10 +1000,7 @@ async function afterLogin() {
       gasGet('getCatalogos')
     ]);
     if (rOs.status === 'ok') {
-      SES._osList = (rOs.os || []).filter(o => {
-        const s = String(o.status || '').trim().toLowerCase();
-        return s !== 'encerrada' && s !== 'encerrado' && s !== 'finalizada' && s !== 'finalizado';
-      });
+      SES._osList = (rOs.os || []).filter(isOSVisivelFieldTapLocal);
       SES._gasOSCarregado = true; // GAS respondeu: nunca usar demo para OS
     }
     if (rCat.status === 'ok') {
@@ -1054,10 +1051,7 @@ async function atualizarOSFieldTap(btn) {
   try {
     const r = await gasGet('getOS', { id_inspetor: SES.inspetor.id_inspetor });
     if (r.status === 'ok') {
-      SES._osList = (r.os || []).filter(o => {
-        const s = String(o.status || '').trim().toLowerCase();
-        return s !== 'encerrada' && s !== 'encerrado' && s !== 'finalizada' && s !== 'finalizado';
-      });
+      SES._osList = (r.os || []).filter(isOSVisivelFieldTapLocal);
       SES._gasOSCarregado = true;
       _lastOSRefresh = Date.now();
       setGASStatus('ok', 'GAS conectado ✓');
@@ -1091,13 +1085,23 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('pageshow', () => { _tentarAutoRefreshT2(); });
 window.addEventListener('focus', () => { _tentarAutoRefreshT2(); });
 
+
+function isOSVisivelFieldTapLocal(o) {
+  const fase = String(o?.fase_atual || '').trim().toLowerCase();
+  const status = String(o?.status || '').trim().toLowerCase();
+  if (['encerrada','encerrado','finalizada','finalizado'].includes(status)) return false;
+  if (fase === 'aguardando_tapparts' || status === 'aguardando tapparts') return false;
+  if (fase === 'campo_concluido' || status === 'fase 2 campo concluída') return false;
+  const isF1 = fase === '1' || status === 'fase 1';
+  const isF2 = fase === '2' || status === 'fase 2';
+  return isF1 || isF2;
+}
+
 function renderT2() {
   document.getElementById('t2-inspector-name').textContent = SES.inspetor.nome;
   // Correção S10 — em produção (GAS_URL configurado) NUNCA mostrar demo para OS
   const DEMO_MODE = !GAS_URL || GAS_URL.includes('COLE_AQUI') || GAS_URL.trim() === '';
-  const allOS = DEMO_MODE
-    ? (SES._osList || getDemoOS())  // modo demo local: ok usar demo
-    : (SES._osList || []);          // produção: apenas lista real (nunca demo)
+  const allOS = (DEMO_MODE ? (SES._osList || getDemoOS()) : (SES._osList || [])).filter(isOSVisivelFieldTapLocal);
 
   // Sprint 8: separar OS enviadas das pendentes
   const osEnviadas = SES._osEnviadas || new Set();
@@ -1887,6 +1891,7 @@ async function enviarLevantamento(btn) {
     // Guarda o id da OS como "levantamento enviado" nesta sessão
     if (!SES._osEnviadas) SES._osEnviadas = new Set();
     SES._osEnviadas.add(SES.os.id_os);
+    await atualizarOSFieldTap(null);
   }
 
   // TC
@@ -1934,9 +1939,10 @@ async function entrarFase2(idOS) {
     }
   } catch(e) {}
 
-  // Fallback demo apenas se GAS falhou (não respondeu). Se GAS respondeu OK com 0 itens, não usar demo.
-  if (!itens.length && !SES._gasOSCarregado) {
-    itens = getDemoItensF2(idOS);
+  if (!itens.length) {
+    hideLoading();
+    showToast('Nenhum item de Fase 2 encontrado para esta OS. Atualize ou verifique o envio no TapParts.', 'warn');
+    return;
   }
 
   // Adicionar campo de controle local
@@ -2107,6 +2113,7 @@ async function fecharOSFase2(btn) {
   SES._osF2Concluidas.add(SES.os?.id_os);
 
   showToast('✅ Fase 2 concluída — OS retornada ao escritório');
+  await atualizarOSFieldTap(null);
   renderT2();
 }
 

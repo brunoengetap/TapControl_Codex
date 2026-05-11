@@ -1,6 +1,6 @@
 // =============================================================================
 // ENGETAP — FieldTap + TapParts
-// GAS_Code_S12.js — Sprint 12
+// GAS_Code_S12.1.js — hotfix estado FieldTap
 // Correção S12: cabeçalho atualizado, ping/healthCheck adicionado,
 //   _contarEquipamentosDaOS localiza colunas pelo cabeçalho,
 //   getEquipamentosByOS retorna lista vazia (nunca erro) quando não há equips,
@@ -245,7 +245,7 @@ function doGet(e) {
       // Correção S12 — diagnóstico: ping / healthCheck
       case 'ping':
       case 'healthCheck':
-        resultado = { status: 'ok', app: 'Engetap FieldTap TapParts GAS', version: 'S12', timestamp: new Date().toISOString() };
+        resultado = { status: 'ok', app: 'Engetap FieldTap TapParts GAS', version: 'S12.1', timestamp: new Date().toISOString() };
         break;
       default:
         resultado = _erro('ACAO_INVALIDA', 'action não reconhecida: ' + action);
@@ -318,24 +318,33 @@ function getClientes(params) {
   return { status: 'ok', clientes: lista };
 }
 
+
+function _isOSVisivelNoFieldTap(obj) {
+  var fase = String(obj.fase_atual || '').toLowerCase();
+  var status = String(obj.status || '').toLowerCase();
+  if (_isOSEncerradaGAS(obj.status, obj.fase_atual)) return false;
+  if (fase === 'aguardando_tapparts' || status === 'aguardando tapparts') return false;
+  if (fase === 'campo_concluido' || status === 'fase 2 campo concluída') return false;
+  var isF1 = fase === '1' || status === 'fase 1';
+  var isF2 = fase === '2' || status === 'fase 2';
+  return isF1 || isF2;
+}
+
 function getOS(params) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var dados = ss.getSheetByName('OS').getDataRange().getValues();
   var cab = dados[0];
   var lista = [];
   var idInspetor = params.id_inspetor ? String(params.id_inspetor) : null;
+  var isFieldTap = !!idInspetor;
   for (var i = 1; i < dados.length; i++) {
     var obj = _linhaParaObjeto(cab, dados[i]);
-    // Inclui OS ativas, Fase 1, Fase 2 e campo_concluido (exclui apenas encerradas/finalizadas)
     if (_isOSEncerradaGAS(obj.status, obj.fase_atual)) continue;
-    // Parseia tecnicos_vinculados
     var tecs = [];
     try { tecs = JSON.parse(obj.tecnicos_vinculados || '[]'); } catch(e) { tecs = []; }
     obj.tecnicos_vinculados = tecs;
-    // Filtro por técnico: se passado id_inspetor, só retorna OS vinculadas a ele
-    if (idInspetor && tecs.length > 0) {
-      if (tecs.indexOf(idInspetor) < 0) continue;
-    }
+    if (idInspetor && tecs.length > 0 && tecs.indexOf(idInspetor) < 0) continue;
+    if (isFieldTap && !_isOSVisivelNoFieldTap(obj)) continue;
     obj.total_equipamentos = _contarEquipamentosDaOS(ss, obj.id_os);
     lista.push(obj);
   }
@@ -731,6 +740,24 @@ function enviarLevantamento(body) {
 
       itensCriados.push({ id_item: idItem, descricao_curta: item.descricao_curta || '', instalado_imediatamente: instaladoAgora });
     });
+
+    if (String(fase) === '1') {
+      var abaOS = ss.getSheetByName('OS');
+      var dadosOS = abaOS.getDataRange().getValues();
+      var cabOS = dadosOS[0];
+      var colIdOS = cabOS.indexOf('id_os');
+      var colFase = cabOS.indexOf('fase_atual');
+      var colStatus = cabOS.indexOf('status');
+      for (var j = 1; j < dadosOS.length; j++) {
+        if (String(dadosOS[j][colIdOS]) === String(body.id_os)) {
+          if (colFase >= 0) abaOS.getRange(j + 1, colFase + 1).setValue('aguardando_tapparts');
+          if (colStatus >= 0) abaOS.getRange(j + 1, colStatus + 1).setValue('Aguardando TapParts');
+          break;
+        }
+      }
+      SpreadsheetApp.flush();
+      registrarEventoOperacional({ tipo_evento: 'FASE1_ENVIADA_FIELDTP', id_os: body.id_os, id_cliente: id_cliente, acao_realizada: 'Fase 1 enviada pelo FieldTap; aguardando tratamento no TapParts', responsavel_id: body.id_inspetor, responsavel_nome: nomeInspetor, responsavel_tipo: 'inspetor', origem: 'FieldTap' });
+    }
 
     SpreadsheetApp.flush();
     registrarEventoOperacional({ tipo_evento: 'ENVIO_LEVANTAMENTO', id_os: body.id_os, id_cliente: id_cliente, acao_realizada: 'Levantamento enviado pelo FieldTap', responsavel_id: body.id_inspetor, responsavel_nome: nomeInspetor, responsavel_tipo: 'inspetor', origem: 'FieldTap', observacao: 'Total itens: ' + body.itens.length, payload_json: JSON.stringify({ id_levantamento: idLevantamento }) });
