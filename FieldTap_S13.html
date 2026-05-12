@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>FieldTap S13.1 — hotfix refresh / estado OS — Engetap</title>
+<title>FieldTap S15 — validação de envio formal Fase 2 e técnico vinculado — Engetap</title>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -1932,8 +1932,10 @@ async function entrarFase2(idOS) {
     // Busca todos os status relevantes da Fase 2 em uma só chamada
     const r1 = await gasGet('getItensByOS', { id_os: idOS, status: 'em_campo_f2,instalado,calibrado,entregue' });
     if (r1.status === 'ok' && r1.itens?.length) itens = r1.itens;
-    // Fallback: pronto_campo (quando fase 2 foi aberta mas status ainda não atualizado)
-    if (!itens.length) {
+    const tecnicoVinculado = (os?.tecnicos_vinculados || []).includes(SES.inspetor?.id_inspetor);
+    const osFormalF2 = String(os?.fase_atual) === '2' || String(os?.status || '').toLowerCase().includes('fase 2');
+    // Fallback controlado: pronto_campo só com fase 2 formal + técnico vinculado
+    if (!itens.length && osFormalF2 && tecnicoVinculado) {
       const r2 = await gasGet('getItensByOS', { id_os: idOS, status: 'pronto_campo' });
       if (r2.status === 'ok' && r2.itens?.length) itens = r2.itens;
     }
@@ -1941,7 +1943,7 @@ async function entrarFase2(idOS) {
 
   if (!itens.length) {
     hideLoading();
-    showToast('Nenhum item de Fase 2 encontrado para esta OS. Atualize ou verifique o envio no TapParts.', 'warn');
+    showToast('Nenhum item formalmente enviado para sua Fase 2. Verifique o envio no TapParts.', 'warn');
     return;
   }
 
@@ -2178,7 +2180,9 @@ async function recarregarItensF2() {
   try {
     const r1 = await gasGet('getItensByOS', { id_os: SES.os.id_os, status: 'em_campo_f2,instalado,calibrado,entregue' });
     if (r1.status === 'ok' && r1.itens?.length) itens = r1.itens;
-    if (!itens.length) {
+    const tecnicoVinculado = (SES.os?.tecnicos_vinculados || []).includes(SES.inspetor?.id_inspetor);
+    const osFormalF2 = String(SES.os?.fase_atual) === '2' || String(SES.os?.status || '').toLowerCase().includes('fase 2');
+    if (!itens.length && osFormalF2 && tecnicoVinculado) {
       const r2 = await gasGet('getItensByOS', { id_os: SES.os.id_os, status: 'pronto_campo' });
       if (r2.status === 'ok' && r2.itens?.length) itens = r2.itens;
     }

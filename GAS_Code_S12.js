@@ -769,6 +769,9 @@ function enviarLevantamento(body) {
 function atualizarStatusItem(body) {
   if (!body.id_item)     return _erro('CAMPO_OBRIGATORIO', 'id_item é obrigatório.');
   if (!body.novo_status) return _erro('CAMPO_OBRIGATORIO', 'novo_status é obrigatório.');
+  if (String(body.novo_status) === 'em_campo_f2' && String(body.origem) !== 'ENVIO_FORMAL_FASE2' && body.autorizacao_fase2 !== true) {
+    return _erro('TRANSICAO_FASE2_REQUER_ENVIO_FORMAL', 'Status em_campo_f2 só pode ser aplicado pelo envio formal da Fase 2.');
+  }
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var lock = LockService.getScriptLock();
   try {
@@ -789,7 +792,8 @@ function atualizarStatusItem(body) {
           body.responsavel || '', body.observacao || '', agora
         ]);
         SpreadsheetApp.flush();
-        registrarEventoOperacional({ tipo_evento: 'ALTERACAO_STATUS_ITEM', id_os: dados[i][cab.indexOf('id_os')] || '', id_item: body.id_item, produto: dados[i][cab.indexOf('descricao_curta')] || '', tipo_acessorio: dados[i][cab.indexOf('tipo_acessorio')] || '', status_anterior: statusAnterior, status_novo: body.novo_status, acao_realizada: 'Status do item alterado', responsavel_nome: body.responsavel || '', origem: body.origem || 'TapParts', observacao: body.observacao || '' });
+        var tipoEvento = String(body.novo_status) === 'em_campo_f2' ? 'ENVIO_FORMAL_FASE2' : 'ALTERACAO_STATUS_ITEM';
+        registrarEventoOperacional({ tipo_evento: tipoEvento, id_os: dados[i][cab.indexOf('id_os')] || '', numero_os: dados[i][cab.indexOf('id_os')] || '', id_item: body.id_item, produto: dados[i][cab.indexOf('descricao_curta')] || '', tipo_acessorio: dados[i][cab.indexOf('tipo_acessorio')] || '', status_anterior: statusAnterior, status_novo: body.novo_status, acao_realizada: 'Status do item alterado', responsavel_nome: body.responsavel || '', responsavel_tipo: 'adm', origem: body.origem || 'TapParts', observacao: body.observacao || '' });
         return { status: 'ok', id_item: body.id_item, novo_status: body.novo_status, timestamp: agora };
       }
     }

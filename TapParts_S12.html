@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TapParts S12.1 — hotfix Fase 2 / toast / sync — Engetap</title>
+<title>TapParts S14 — envio formal Fase 2 com técnico obrigatório — Engetap</title>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -1362,7 +1362,7 @@ code { font-size: 11px; color: var(--accent); font-family: monospace; }
       <div class="field" style="margin-top:8px">
         <label>Técnico responsável pela Fase 2 <span style="color:var(--text3);font-weight:400">(pode ser diferente da Fase 1)</span></label>
         <select id="f2-tecnico-sel" style="width:100%;background:var(--surf2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;font-size:14px;color:var(--text);font-family:var(--body)">
-          <option value="">— Todos os técnicos verão (não restringir) —</option>
+          <option value="">— Selecione o técnico responsável —</option>
         </select>
       </div>
       <div class="field" style="margin-top:8px">
@@ -3179,6 +3179,11 @@ async function avancarStatus(itemId, novoStatus) {
   if (!item) return;
 
   const old = item.status;
+  if (novoStatus === 'em_campo_f2') {
+    const abrir = confirm('Para enviar itens ao FieldTap em Fase 2, use o envio formal da OS. É necessário selecionar o técnico responsável para evitar inconsistências.\n\nClique em OK para abrir o envio formal da Fase 2, ou Cancelar para voltar.');
+    if (abrir && item.id_os) abrirModalFase2(item.id_os);
+    return;
+  }
 
   if (GAS_URL) {
     try {
@@ -3213,7 +3218,7 @@ async function avancarStatus(itemId, novoStatus) {
     if (os && !isOSEncerrada(os)) {
       const toastEl = document.getElementById('toast');
       if (toastEl) {
-        showActionToast('✓ Pronto p/ Campo', 'Enviar Fase 2 agora →', () => abrirModalFase2(item.id_os), 6000);
+        showActionToast('Item marcado como Pronto p/ Campo. Para aparecer no FieldTap, envie formalmente a Fase 2 da OS e selecione o técnico.', 'Enviar Fase 2 agora', () => abrirModalFase2(item.id_os), 7000);
       }
     }
   }
@@ -3283,6 +3288,7 @@ function openDrawer(itemId) {
   // All statuses for free selector (excluding current)
   const allStatuses = Object.keys(STATUS_LABEL).filter(s => s !== item.status);
   const statusOptions = allStatuses.map(s => {
+    if (s === 'em_campo_f2') return `<option value="${s}" disabled>🔒 Em Campo F2 — usar envio formal da OS</option>`;
     const isBack = pipeline.indexOf(s) < curIdx && pipeline.indexOf(s) >= 0;
     return `<option value="${s}">${isBack ? '↩ ' : ''}${STATUS_LABEL[s]||s}</option>`;
   }).join('');
@@ -3398,6 +3404,12 @@ async function confirmarMudancaStatus(itemId) {
   const sel = document.getElementById('drawer-status-sel');
   const novoStatus = sel?.value;
   if (!novoStatus) return;
+  if (novoStatus === 'em_campo_f2') {
+    const item = DB.itens.find(i => i.id_item === itemId);
+    const abrir = confirm('Para enviar itens ao FieldTap em Fase 2, use o envio formal da OS. É necessário selecionar o técnico responsável para evitar inconsistências.\n\nClique em OK para abrir o envio formal da Fase 2, ou Cancelar para voltar.');
+    if (abrir && item?.id_os) abrirModalFase2(item.id_os);
+    return;
+  }
   await avancarStatus(itemId, novoStatus);
   cancelarMudancaStatus();
 }
@@ -3900,6 +3912,28 @@ function renderAll() {
   if (badge && DB.levantamentos?.length) badge.textContent = DB.levantamentos.length;
 }
 
+function diagnosticarInconsistenciasFase2() {
+  const osMap = Object.fromEntries((DB.os || []).map(o => [o.id_os, o]));
+  const tecnicosAtivos = new Set((DB.inspetores || []).filter(t => String(t.ativo) === 'true').map(t => t.id));
+  const itens = DB.itens || [];
+  const inconsistencias = [];
+  itens.filter(i => i.status === 'em_campo_f2').forEach(i => {
+    const os = osMap[i.id_os];
+    if (!os || String(os.fase_atual) !== '2') inconsistencias.push({ tipo: 'ITEM_F2_OS_NAO_FASE2', id_os: i.id_os, id_item: i.id_item });
+    if (!os?.tecnicos_vinculados?.length) inconsistencias.push({ tipo: 'ITEM_F2_SEM_TECNICO', id_os: i.id_os, id_item: i.id_item });
+  });
+  (DB.os || []).forEach(o => {
+    const itensF2 = itens.filter(i => i.id_os === o.id_os && i.status === 'em_campo_f2');
+    if (String(o.fase_atual) === '2' && !itensF2.length) inconsistencias.push({ tipo: 'OS_FASE2_SEM_ITENS_F2', id_os: o.id_os });
+    (o.tecnicos_vinculados || []).forEach(tid => { if (!tecnicosAtivos.has(tid)) inconsistencias.push({ tipo: 'OS_TECNICO_INVALIDO', id_os: o.id_os, tecnico: tid }); });
+  });
+  console.group('Diagnóstico Fase 2');
+  console.table(inconsistencias);
+  console.groupEnd();
+  showToast(`Diagnóstico Fase 2: ${inconsistencias.length} inconsistência(s). Veja o console.`, inconsistencias.length ? 'warn' : 'ok');
+  return inconsistencias;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // S5 — FASE 2: RETORNO AO CAMPO
 // ═══════════════════════════════════════════════════════════════
@@ -3924,7 +3958,7 @@ function abrirModalFase2(idOS) {
     list.innerHTML = '';
     document.querySelector('#modal-fase2 .btn-primary').disabled = true;
   } else {
-    infoBox.textContent = `${itensProntos.length} item${itensProntos.length > 1 ? 's' : ''} pronto${itensProntos.length > 1 ? 's' : ''} para envio ao campo:`;
+    infoBox.textContent = `OS ${os?.numero_os || idOS} · ${os?.cliente || '—'} · ${itensProntos.length} item${itensProntos.length > 1 ? 's' : ''} pronto${itensProntos.length > 1 ? 's' : ''} para envio ao campo.`;
     document.querySelector('#modal-fase2 .btn-primary').disabled = false;
 
     // Agrupar por TAG de equipamento
@@ -3958,9 +3992,9 @@ function abrirModalFase2(idOS) {
   // Popula seletor de técnico para a fase 2
   const tecSel = document.getElementById('f2-tecnico-sel');
   if (tecSel) {
-    tecSel.innerHTML = '<option value="">— Todos os técnicos verão (não restringir) —</option>' +
+    tecSel.innerHTML = '<option value="">— Selecione o técnico responsável —</option>' +
       (DB.inspetores || []).filter(t => String(t.ativo) === 'true').map(t =>
-        `<option value="${t.id}">${t.nome}</option>`).join('');
+        `<option value="${t.id}">${t.nome} (${t.id})</option>`).join('');
     // Pré-seleciona técnico já vinculado à OS (se único)
     const tecsOS = os?.tecnicos_vinculados || [];
     if (tecsOS.length === 1) tecSel.value = tecsOS[0];
@@ -3978,21 +4012,21 @@ async function confirmarFase2() {
   if (btn) { btn.disabled = true; btn.textContent = 'Enviando...'; }
 
   try {
-    if (GAS_URL) {
-      const r = await gasPost('avancarFaseOS', { id_os: idOS, nova_fase: 2, observacao: obs });
-      if (!r || r.status !== 'ok') throw new Error('Erro ao avançar fase da OS.');
-      if (tecnicoF2) {
-        const rt = await gasPost('salvarOS', { id_os: idOS, tecnicos_vinculados: [tecnicoF2] });
-        if (!rt || rt.status !== 'ok') throw new Error('Falha ao vincular técnico da Fase 2.');
-      }
-    }
-
+    if (!tecnicoF2) throw new Error('Selecione o técnico responsável antes de enviar a OS ao FieldTap.');
     const prontos = (DB.itens || []).filter(it => it.id_os === idOS && it.status === 'pronto_campo');
+    if (!prontos.length) throw new Error('Nenhum item pronto para campo nesta OS.');
+
+    if (GAS_URL) {
+      const rt = await gasPost('salvarOS', { id_os: idOS, tecnicos_vinculados: [tecnicoF2], origem: 'TapParts' });
+      if (!rt || rt.status !== 'ok') throw new Error('Falha ao vincular técnico da Fase 2.');
+      const r = await gasPost('avancarFaseOS', { id_os: idOS, nova_fase: 2, observacao: obs, origem: 'TapParts' });
+      if (!r || r.status !== 'ok') throw new Error('Erro ao avançar fase da OS.');
+    }
     const falhas = [];
     if (GAS_URL && prontos.length) {
       for (const it of prontos) {
         try {
-          const ri = await gasPost('atualizarStatusItem', { id_item: it.id_item, novo_status: 'em_campo_f2', responsavel: 'TapParts', observacao: 'Enviado ao FieldTap na abertura da Fase 2' });
+          const ri = await gasPost('atualizarStatusItem', { id_item: it.id_item, novo_status: 'em_campo_f2', origem: 'ENVIO_FORMAL_FASE2', autorizacao_fase2: true, responsavel: 'TapParts', observacao: `Enviado formalmente ao FieldTap na Fase 2 para o técnico ${tecnicoF2}` });
           if (!ri || ri.status !== 'ok') falhas.push(it.id_item);
         } catch(e) { falhas.push(it.id_item); }
       }
