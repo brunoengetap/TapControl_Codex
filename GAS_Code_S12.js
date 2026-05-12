@@ -1,3 +1,4 @@
+// GAS S15 — endpoints de cancelamento, reabertura e reenvio FieldTap
 // =============================================================================
 // ENGETAP — FieldTap + TapParts
 // GAS_Code_S12.1.js — hotfix estado FieldTap
@@ -245,7 +246,7 @@ function doGet(e) {
       // Correção S12 — diagnóstico: ping / healthCheck
       case 'ping':
       case 'healthCheck':
-        resultado = { status: 'ok', app: 'Engetap FieldTap TapParts GAS', version: 'S12.1', timestamp: new Date().toISOString() };
+        resultado = { status: 'ok', app: 'Engetap FieldTap TapParts GAS', version: 'S15', timestamp: new Date().toISOString() };
         break;
       default:
         resultado = _erro('ACAO_INVALIDA', 'action não reconhecida: ' + action);
@@ -279,6 +280,10 @@ function doPost(e) {
       case 'vincularEquipamentoOS':         resultado = vincularEquipamentoOS(body);         break;
       case 'salvarItemCatalogo':            resultado = salvarItemCatalogo(body);            break;
       case 'toggleAtivoItem':               resultado = toggleAtivoItem(body);               break;
+      case 'cancelarEnvioLevantamentoFieldTap': resultado = cancelarEnvioLevantamentoFieldTap(body); break;
+      case 'cancelarFechamentoFase2FieldTap':   resultado = cancelarFechamentoFase2FieldTap(body);   break;
+      case 'reabrirOSParaFieldTap':             resultado = reabrirOSParaFieldTap(body);             break;
+      case 'reenviarOSFieldTap':                resultado = reenviarOSFieldTap(body);                break;
       default:
         resultado = _erro('ACAO_INVALIDA', 'action não reconhecida: ' + action);
     }
@@ -1672,4 +1677,54 @@ function _resposta(dados) {
 
 function _erro(codigo, mensagem) {
   return { status: 'erro', codigo: codigo, mensagem: mensagem };
+}
+
+
+function _atualizarStatusFaseOS(ss, idOS, statusNovo, faseNova, idTecnico){
+  var abaOS = ss.getSheetByName('OS');
+  var dados = abaOS.getDataRange().getValues();
+  var cab = dados[0], cId=cab.indexOf('id_os'), cStatus=cab.indexOf('status'), cFase=cab.indexOf('fase_atual'), cTec=cab.indexOf('tecnicos_vinculados');
+  for (var i=1;i<dados.length;i++){
+    if (String(dados[i][cId])===String(idOS)){
+      if(cStatus>=0) abaOS.getRange(i+1,cStatus+1).setValue(statusNovo);
+      if(cFase>=0) abaOS.getRange(i+1,cFase+1).setValue(faseNova);
+      if(idTecnico && cTec>=0) abaOS.getRange(i+1,cTec+1).setValue(JSON.stringify([String(idTecnico)]));
+      return { numero_os: dados[i][cab.indexOf('numero_os')] || idOS };
+    }
+  }
+  throw new Error('OS não encontrada: '+idOS);
+}
+function cancelarEnvioLevantamentoFieldTap(body){
+  if(!body.id_os||!body.id_inspetor) return _erro('CAMPO_OBRIGATORIO','id_os e id_inspetor são obrigatórios.');
+  var ss=SpreadsheetApp.getActiveSpreadsheet();
+  var nome=_buscarNomeInspetor(ss, body.id_inspetor);
+  var os=_atualizarStatusFaseOS(ss, body.id_os, 'Fase 1', '1');
+  registrarEventoOperacional({tipo_evento:'CANCELAMENTO_ENVIO_FASE1_FIELDTP',id_os:body.id_os,numero_os:os.numero_os,responsavel_id:body.id_inspetor,responsavel_nome:nome,responsavel_tipo:'inspetor',origem:body.origem||'FieldTap',observacao:body.motivo||'Cancelamento para correção em campo'});
+  return {status:'ok'};
+}
+function cancelarFechamentoFase2FieldTap(body){
+  if(!body.id_os||!body.id_inspetor) return _erro('CAMPO_OBRIGATORIO','id_os e id_inspetor são obrigatórios.');
+  var ss=SpreadsheetApp.getActiveSpreadsheet();
+  var nome=_buscarNomeInspetor(ss, body.id_inspetor);
+  var os=_atualizarStatusFaseOS(ss, body.id_os, 'Fase 2', '2');
+  registrarEventoOperacional({tipo_evento:'CANCELAMENTO_FECHAMENTO_FASE2_FIELDTP',id_os:body.id_os,numero_os:os.numero_os,responsavel_id:body.id_inspetor,responsavel_nome:nome,responsavel_tipo:'inspetor',origem:body.origem||'FieldTap',observacao:body.motivo||'Cancelamento de fechamento para correção'});
+  return {status:'ok'};
+}
+function reabrirOSParaFieldTap(body){
+  if(!body.id_os||!body.fase_destino||!body.motivo) return _erro('CAMPO_OBRIGATORIO','id_os, fase_destino e motivo são obrigatórios.');
+  if(String(body.fase_destino)==='2' && !body.id_tecnico) return _erro('CAMPO_OBRIGATORIO','id_tecnico obrigatório para Fase 2.');
+  var ss=SpreadsheetApp.getActiveSpreadsheet();
+  var st=String(body.fase_destino)==='2'?'Fase 2':'Fase 1';
+  var os=_atualizarStatusFaseOS(ss, body.id_os, st, String(body.fase_destino), body.id_tecnico);
+  registrarEventoOperacional({tipo_evento:'REABERTURA_OS_FIELDTP_TAPPARTS',id_os:body.id_os,numero_os:os.numero_os,responsavel_nome:body.responsavel||'TapParts',responsavel_tipo:'adm',origem:'TapParts',observacao:body.motivo});
+  return {status:'ok'};
+}
+function reenviarOSFieldTap(body){
+  if(!body.id_os||!body.fase||!body.motivo) return _erro('CAMPO_OBRIGATORIO','id_os, fase e motivo são obrigatórios.');
+  if(String(body.fase)==='2' && !body.id_tecnico) return _erro('CAMPO_OBRIGATORIO','id_tecnico obrigatório para Fase 2.');
+  var ss=SpreadsheetApp.getActiveSpreadsheet();
+  var st=String(body.fase)==='2'?'Fase 2':'Fase 1';
+  var os=_atualizarStatusFaseOS(ss, body.id_os, st, String(body.fase), body.id_tecnico);
+  registrarEventoOperacional({tipo_evento:'REENVIO_OS_FIELDTP_TAPPARTS',id_os:body.id_os,numero_os:os.numero_os,responsavel_nome:body.responsavel||'TapParts',responsavel_tipo:'adm',origem:'TapParts',observacao:body.motivo});
+  return {status:'ok'};
 }

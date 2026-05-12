@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>FieldTap S15 — validação de envio formal Fase 2 e técnico vinculado — Engetap</title>
+<title>FieldTap S16 — OS recentes por 3 dias com cancelamento — Engetap</title>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -767,7 +767,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbzUFHKIWPWC9EnrQyk-5GaWJ6BgeFdIQ5FLeFo4UAfKP4Qx86b2jM52yWgG-XpIz86Y/exec';
 
 // Correção S12 — versionamento
-const APP_VERSION = 'S13.1';
+const APP_VERSION = 'S16';
 
 // ════════════════════════════════════════════════════════════════
 // ESTADO DA SESSÃO
@@ -1086,6 +1086,14 @@ window.addEventListener('pageshow', () => { _tentarAutoRefreshT2(); });
 window.addEventListener('focus', () => { _tentarAutoRefreshT2(); });
 
 
+
+const RETENCAO_DIAS_FIELDTAP = 3;
+function getRetencaoFieldTapKey(){ const id=(SES.inspetor?.id_inspetor||'anon').toString().trim(); return `fieldtap_os_recentes_${id}`; }
+function getFimTerceiroDiaLocal(baseIso){ const dt = baseIso ? new Date(baseIso) : new Date(); const fim = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate() + RETENCAO_DIAS_FIELDTAP, 23, 59, 59, 999); return fim.toISOString(); }
+function getFieldTapRecentesStore(){ try{ const raw=localStorage.getItem(getRetencaoFieldTapKey()); const parsed=raw?JSON.parse(raw):{}; const store={fase1_enviadas:parsed.fase1_enviadas||{}, fase2_concluidas:parsed.fase2_concluidas||{}}; return limparOSRecentesExpiradas(store);}catch(e){ return {fase1_enviadas:{},fase2_concluidas:{}}; } }
+function saveFieldTapRecentesStore(store){ try{ localStorage.setItem(getRetencaoFieldTapKey(), JSON.stringify(store||{fase1_enviadas:{},fase2_concluidas:{}})); }catch(e){} }
+function isDentroRetencao3Dias(ts,expira){ const limite = expira?new Date(expira):new Date(getFimTerceiroDiaLocal(ts)); return Date.now() <= limite.getTime(); }
+function limparOSRecentesExpiradas(store){ const now=Date.now(); ['fase1_enviadas','fase2_concluidas'].forEach(k=>{ Object.keys(store[k]||{}).forEach(id=>{ const r=store[k][id]; const exp=r?.expira_em?new Date(r.expira_em).getTime():new Date(getFimTerceiroDiaLocal(r?.timestamp_envio||r?.timestamp_fechamento)).getTime(); if(!exp||now>exp) delete store[k][id]; }); }); saveFieldTapRecentesStore(store); return store; }
 function isOSVisivelFieldTapLocal(o) {
   const fase = String(o?.fase_atual || '').trim().toLowerCase();
   const status = String(o?.status || '').trim().toLowerCase();
@@ -1106,9 +1114,11 @@ function renderT2() {
   // Sprint 8: separar OS enviadas das pendentes
   const osEnviadas = SES._osEnviadas || new Set();
   const osF2Conc   = SES._osF2Concluidas || new Set();
-  const osPendentes  = allOS.filter(o => !osEnviadas.has(o.id_os) && !osF2Conc.has(o.id_os));
-  const osJaEnviadas = allOS.filter(o => osEnviadas.has(o.id_os));
-  const osF2Done     = allOS.filter(o => osF2Conc.has(o.id_os));
+  const storeRecentes = getFieldTapRecentesStore();
+  const osJaEnviadas = Object.values(storeRecentes.fase1_enviadas||{}).filter(x=>isDentroRetencao3Dias(x.timestamp_envio,x.expira_em));
+  const osF2Done = Object.values(storeRecentes.fase2_concluidas||{}).filter(x=>isDentroRetencao3Dias(x.timestamp_fechamento,x.expira_em));
+  const idsRecentes = new Set([...osJaEnviadas.map(x=>x.id_os), ...osF2Done.map(x=>x.id_os)]);
+  const osPendentes  = allOS.filter(o => !osEnviadas.has(o.id_os) && !osF2Conc.has(o.id_os) && !idsRecentes.has(o.id_os));
 
   const body = document.getElementById('t2-body');
   // Botão Atualizar — injetado no header da T2; Correção S12: var(--text1) não existe, usar var(--text2)
@@ -1159,7 +1169,7 @@ function renderT2() {
       </div>`).join('');
     }
     if (osJaEnviadas.length) {
-      html += `<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin:16px 0 8px;padding:0 4px">✅ Levantamento enviado</div>`;
+      html += `<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin:16px 0 8px;padding:0 4px">✅ Enviadas recentemente — aguardando TapParts</div>`;
       html += osJaEnviadas.map(o => `
       <div class="os-card" style="opacity:0.6;border:1px dashed var(--ok)">
         <div style="display:flex;align-items:center;justify-content:space-between">
@@ -1168,11 +1178,11 @@ function renderT2() {
             <div class="os-cli">🏢 ${o.cliente}</div>
             <div class="os-desc">${o.descricao || '—'}</div>
           </div>
-          <button onclick="event.stopPropagation();cancelarEnvioOS('${o.id_os}')" style="background:var(--surf2);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer;white-space:nowrap;color:var(--text2)">↩ Cancelar</button>
+          <button onclick="event.stopPropagation();cancelarEnvioOS('${o.id_os}')" style="background:var(--surf2);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer;white-space:nowrap;color:var(--text2)">↩ Cancelar envio</button>
         </div>      </div>`).join('');
     }
     if (osF2Done.length) {
-      html += `<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin:16px 0 8px;padding:0 4px">✅ Fase 2 concluída</div>`;
+      html += `<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin:16px 0 8px;padding:0 4px">✅ Fase 2 concluída recentemente</div>`;
       html += osF2Done.map(o => `
       <div class="os-card" style="opacity:0.55;border:1px dashed var(--ok)">
         <div style="display:flex;align-items:center;justify-content:space-between">
@@ -1181,7 +1191,7 @@ function renderT2() {
             <div class="os-cli">🏢 ${o.cliente}</div>
             <div class="os-desc">${o.descricao || '—'} · Fase 2 concluída</div>
           </div>
-          <button onclick="event.stopPropagation();cancelarFechamentoFase2('${o.id_os}')" style="background:var(--surf2);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer;white-space:nowrap;color:var(--text2)">↩ Cancelar</button>
+          <button onclick="event.stopPropagation();cancelarFechamentoFase2('${o.id_os}')" style="background:var(--surf2);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer;white-space:nowrap;color:var(--text2)">↩ Cancelar fechamento</button>
         </div>
       </div>`).join('');
     }
@@ -1888,10 +1898,14 @@ async function enviarLevantamento(btn) {
 
   // Sprint 8: marca a OS como levantamento enviado para sumir da lista
   if (enviado && SES._osList) {
-    // Guarda o id da OS como "levantamento enviado" nesta sessão
     if (!SES._osEnviadas) SES._osEnviadas = new Set();
     SES._osEnviadas.add(SES.os.id_os);
+    const store = getFieldTapRecentesStore();
+    const ts = new Date().toISOString();
+    store.fase1_enviadas[SES.os.id_os] = { id_os: SES.os.id_os, numero_os: SES.os.numero_os||SES.os.id_os, cliente: SES.os.cliente||'', descricao: SES.os.descricao||'', fase_atual_original:'1', status_original:'Fase 1', timestamp_envio: ts, id_levantamento: levId, total_itens: totalItens, expira_em: getFimTerceiroDiaLocal(ts) };
+    saveFieldTapRecentesStore(store);
     await atualizarOSFieldTap(null);
+    renderT2();
   }
 
   // TC
@@ -1901,10 +1915,16 @@ async function enviarLevantamento(btn) {
   goTo('tc');
 }
 
-function cancelarEnvioOS(idOS) {
-  if (SES._osEnviadas) SES._osEnviadas.delete(idOS);
-  renderT2();
-  showToast('Envio cancelado — OS voltou para a lista');
+async function cancelarEnvioOS(idOS) {
+  if (!confirm('Cancelar o envio desta OS para corrigir lançamentos em campo?')) return;
+  try {
+    const r = await gasPost('cancelarEnvioLevantamentoFieldTap', { id_os:idOS, id_inspetor:SES.inspetor?.id_inspetor, origem:'FieldTap' });
+    if (r.status !== 'ok') throw new Error(r.mensagem || 'Falha ao cancelar envio');
+    const store = getFieldTapRecentesStore(); delete store.fase1_enviadas[idOS]; saveFieldTapRecentesStore(store);
+    if (SES._osEnviadas) SES._osEnviadas.delete(idOS);
+    await atualizarOSFieldTap(null); renderT2();
+    showToast('Envio cancelado. OS liberada para correção.');
+  } catch(e){ showToast(e.message || 'Erro ao cancelar envio', 'err'); }
 }
 
 function novaOS() {
@@ -2113,16 +2133,25 @@ async function fecharOSFase2(btn) {
   // Marca a OS como fase 2 concluída nesta sessão (igual ao padrão _osEnviadas da Fase 1)
   if (!SES._osF2Concluidas) SES._osF2Concluidas = new Set();
   SES._osF2Concluidas.add(SES.os?.id_os);
-
-  showToast('✅ Fase 2 concluída — OS retornada ao escritório');
+  const store = getFieldTapRecentesStore();
+  const ts = new Date().toISOString();
+  store.fase2_concluidas[SES.os?.id_os] = { id_os: SES.os?.id_os, numero_os: SES.os?.numero_os||SES.os?.id_os, cliente: SES.os?.cliente||'', descricao: SES.os?.descricao||'', fase_atual_original:'2', status_original:'Fase 2', timestamp_fechamento: ts, total_itens: total, expira_em:getFimTerceiroDiaLocal(ts) };
+  saveFieldTapRecentesStore(store);
+  showToast('✅ Fase 2 concluída recentemente — OS retornada ao escritório');
   await atualizarOSFieldTap(null);
   renderT2();
 }
 
-function cancelarFechamentoFase2(idOS) {
-  if (SES._osF2Concluidas) SES._osF2Concluidas.delete(idOS);
-  renderT2();
-  showToast('Fechamento cancelado — OS voltou para a lista');
+async function cancelarFechamentoFase2(idOS) {
+  if (!confirm('Cancelar o fechamento da Fase 2 para corrigir lançamentos?')) return;
+  try {
+    const r = await gasPost('cancelarFechamentoFase2FieldTap', { id_os:idOS, id_inspetor:SES.inspetor?.id_inspetor, origem:'FieldTap' });
+    if (r.status !== 'ok') throw new Error(r.mensagem || 'Falha ao cancelar fechamento');
+    const store = getFieldTapRecentesStore(); delete store.fase2_concluidas[idOS]; saveFieldTapRecentesStore(store);
+    if (SES._osF2Concluidas) SES._osF2Concluidas.delete(idOS);
+    await atualizarOSFieldTap(null); renderT2();
+    showToast('Fechamento cancelado. Fase 2 liberada para correção.');
+  } catch(e){ showToast(e.message || 'Erro ao cancelar fechamento', 'err'); }
 }
 
 

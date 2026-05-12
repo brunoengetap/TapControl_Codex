@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TapParts S14 — envio formal Fase 2 com técnico obrigatório — Engetap</title>
+<title>TapParts S15 — reabertura e reenvio administrativo ao FieldTap — Engetap</title>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -1420,7 +1420,7 @@ code { font-size: 11px; color: var(--accent); font-family: monospace; }
 // ═══════════════════════════════════════════════════════════════
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbzUFHKIWPWC9EnrQyk-5GaWJ6BgeFdIQ5FLeFo4UAfKP4Qx86b2jM52yWgG-XpIz86Y/exec'; // TODO: colar URL do GAS aqui
 // Correção S12 — versionamento
-const APP_VERSION = 'S12.1';
+const APP_VERSION = 'S15';
 
 // ═══════════════════════════════════════════════════════════════
 // ESTADO LOCAL (banco de dados em memória enquanto GAS não está conectado)
@@ -1846,6 +1846,7 @@ function renderOS() {
           ${isCampoConcluida ? `<button class="btn btn-ok btn-sm" onclick="encerrarOS('${o.id_os}')" style="font-size:11px;padding:3px 8px">✅ Encerrar OS</button>` : ''}
           ${(!isOSEncerrada(o) && !isCampoConcluida) ? `<button class="btn btn-ghost btn-sm" onclick="encerrarOS('${o.id_os}')" title="Encerrar OS" style="font-size:11px;padding:3px 8px;border-color:var(--ok);color:var(--ok)">✅ Encerrar</button>` : ''}
           ${isOSEncerrada(o) ? `<button class="btn btn-ghost btn-sm" onclick="reabrirOS('${o.id_os}')" title="Reabrir OS" style="font-size:11px;padding:3px 8px;border-color:var(--warn);color:var(--warn)">↩ Reabrir</button>` : ''}
+          ${['Aguardando TapParts','Fase 2 Campo Concluída','Encerrada'].includes(o.status) || ['aguardando_tapparts','campo_concluido'].includes(String(o.fase_atual)) ? `<button class="btn btn-ghost btn-sm" onclick="abrirAcaoFieldTapOS('${o.id_os}')" style="font-size:11px;padding:3px 8px">📲 FieldTap</button>` : ''}
         </div>
       </td>
     </tr>`;
