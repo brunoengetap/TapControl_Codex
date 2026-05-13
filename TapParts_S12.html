@@ -2303,12 +2303,25 @@ function abrirModalEquip(id=null) {
   document.getElementById('eq-localizacao').value = e.localizacao || '';
   document.getElementById('eq-campo').value = e.campo_livre || '';
   const tipos = ['Vaso de pressão','Caldeira','Tubulação','Tanque'];
-  document.getElementById('eq-tipo').value = e.tipo || 'Vaso de pressão';
+  document.getElementById('eq-tipo').value = normalizeTipoEquipamentoParaSelect(e.tipo);
   const cliSel = document.getElementById('eq-cliente');
   cliSel.innerHTML = '<option value="">— Selecione —</option>' + DB.clientes.filter(c=>c.ativo).map(c=>`<option value="${c.id_cliente}" ${c.id_cliente===e.id_cliente?'selected':''}>${c.nome}</option>`).join('');
   populateOSByCliente(e.id_cliente || '');
   if (e.id_os) document.getElementById('eq-os').value = e.id_os;
   openModal('modal-equip');
+}
+
+
+function normalizeTipoEquipamentoParaSelect(tipo) {
+  const t = String(tipo || '').trim().toLowerCase();
+  if (t.includes('vaso')) return 'Vaso de pressão';
+  if (t.includes('caldeira')) return 'Caldeira';
+  if (t.includes('tanque')) return 'Tanque';
+  if (t.includes('tubula')) return 'Tubulação';
+  return 'Vaso de pressão';
+}
+function normalizeTipoEquipamentoParaSalvar(tipo) {
+  return normalizeTipoEquipamentoParaSelect(tipo);
 }
 
 function editarEquip(id) { abrirModalEquip(id); }
@@ -2322,7 +2335,7 @@ async function salvarEquipamento() {
   const id = document.getElementById('eq-id').value;
   const obj = {
     id_cliente: cliId, cliente: cli.nome, id_os: osId,
-    tipo: document.getElementById('eq-tipo').value,
+    tipo: normalizeTipoEquipamentoParaSalvar(document.getElementById('eq-tipo').value),
     tag, localizacao: document.getElementById('eq-localizacao').value,
     pmta: document.getElementById('eq-pmta').value,
     campo_livre: document.getElementById('eq-campo').value,
@@ -3058,7 +3071,10 @@ function renderDashboard() {
     ? osAtArr.map(o => {
         const oItens = itens.filter(i => i.id_os === o.id_os);
         const STATI_CONCLUIDOS = ['instalado','instalado_campo','entregue','calibrado','concluido','em_campo_f2'];
-        const pct = oItens.length ? Math.round(oItens.filter(i=>STATI_CONCLUIDOS.includes(i.status)).length / oItens.length * 100) : 0;
+        const bruto = oItens.length ? Math.round(oItens.filter(i=>STATI_CONCLUIDOS.includes(i.status)).length / oItens.length * 100) : 0;
+        const encerrada = isOSEncerrada(o);
+        const pct = encerrada ? 100 : Math.min(bruto, 95);
+        console.log('[DASH_PROGRESS]', o.numero_os, { bruto, pct, encerrada, fase_atual:o.fase_atual, status:o.status });
         return `<div class="dash-item">
           <div>
             <div class="dash-item-label">OS ${o.numero_os} — ${o.cliente}</div>
@@ -4043,8 +4059,8 @@ async function confirmarFase2() {
     prontos.forEach(it => { it.status = 'em_campo_f2'; });
 
     closeModal('modal-fase2');
+    if (GAS_URL) { try { await syncGAS(); } catch(e) { console.warn('[FASE2_SYNC] syncGAS falhou', e); } }
     renderOS(); renderDashboard(); renderPipeline(); updateBadges();
-    if (GAS_URL) { try { await syncGAS(); } catch(e) {} }
     showToast('✅ Fase 2 enviada ao FieldTap');
   } catch (e) {
     showToast(e.message || 'Erro ao enviar Fase 2 ao FieldTap', 'err');

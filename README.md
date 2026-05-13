@@ -15,3 +15,13 @@ Todos os arquivos
 - FieldTap S16: OS enviadas/concluídas permanecem visíveis por 3 dias, opacas, com cancelamento.
 - TapParts S15: reabertura/reenvio administrativo ao FieldTap.
 - GAS S15: endpoints de cancelamento, reabertura e reenvio.
+
+
+### 2026-05-13 — S17 / GAS S16 — Correções cirúrgicas
+1. Cancelamento de envio FieldTap preserva estado do levantamento para correção.
+2. Reenvio após cancelamento não duplica levantamento/OS.
+3. Fase 2 enviada pelo TapParts aparece imediatamente no FieldTap via Atualizar.
+4. Correção do tipo de equipamento em modal de edição.
+5. Dashboard não marca OS em Fase 2 como 100% concluída.
+6. Proteção contra duplicidade de OS por número.
+7. Normalização de status/fase FieldTap/TapParts/GAS.

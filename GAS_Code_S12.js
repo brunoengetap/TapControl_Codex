@@ -593,6 +593,16 @@ function _isOSEncerradaGAS(status, fase_atual) {
   return s === 'encerrada' || s === 'encerrado' || s === 'finalizada' || s === 'finalizado' || f === 'encerrada';
 }
 
+function _normalizarNumeroOS(numero) {
+  return String(numero || '').toUpperCase().replace(/\s+/g,'').replace(/^OS[-_]?/,'');
+}
+function _normalizarTecnicosVinculados(v) {
+  if (Array.isArray(v)) return JSON.stringify(v.filter(Boolean));
+  if (v === undefined || v === null || v === '') return '[]';
+  try { var p = JSON.parse(v); if (Array.isArray(p)) return JSON.stringify(p.filter(Boolean)); } catch(e) {}
+  return JSON.stringify([String(v)]);
+}
+
 function salvarOS(body) {
   // Atualização parcial: se id_os fornecido, não exige id_cliente nem descricao
   if (!body.id_os) {
@@ -618,7 +628,7 @@ function salvarOS(body) {
           if (body.status)     aba.getRange(row, 7).setValue(body.status);
           if (body.fase_atual) aba.getRange(row, 8).setValue(body.fase_atual);
           if (body.tecnicos_vinculados !== undefined && colTecs >= 0) {
-            var tecsVal = Array.isArray(body.tecnicos_vinculados) ? JSON.stringify(body.tecnicos_vinculados) : String(body.tecnicos_vinculados);
+            var tecsVal = _normalizarTecnicosVinculados(body.tecnicos_vinculados);
             aba.getRange(row, colTecs + 1).setValue(tecsVal);
           }
           SpreadsheetApp.flush();
@@ -627,11 +637,27 @@ function salvarOS(body) {
       }
       return _erro('ITEM_NAO_ENCONTRADO', 'OS não encontrada: ' + body.id_os);
     } else {
+      var dadosExist = aba.getDataRange().getValues();
+      var cabExist = dadosExist[0];
+      var numeroBody = body.numero_os || '';
+      var numeroNormBody = _normalizarNumeroOS(numeroBody);
+      for (var x = 1; x < dadosExist.length; x++) {
+        var numExist = String(dadosExist[x][3] || '');
+        if (numeroNormBody && _normalizarNumeroOS(numExist) === numeroNormBody) {
+          var rowDup = x + 1;
+          aba.getRange(rowDup, 2).setValue(body.id_cliente || dadosExist[x][1]);
+          aba.getRange(rowDup, 3).setValue(nomeCliente || dadosExist[x][2]);
+          aba.getRange(rowDup, 5).setValue(body.descricao || dadosExist[x][4]);
+          aba.getRange(rowDup, 9).setValue(_normalizarTecnicosVinculados(body.tecnicos_vinculados));
+          console.warn('[OS_DUPLICADA] numero_os=' + numExist + ' ids=[' + dadosExist[x][0] + ']');
+          SpreadsheetApp.flush();
+          return { status:'ok', modo:'atualizado_por_numero_os', id_os: dadosExist[x][0] };
+        }
+      }
       var id = _gerarId(ss, 'OS', 'OS');
       var data = body.data_abertura || new Date().toISOString().split('T')[0];
-      // Usa numero_os do body se fornecido; caso contrário usa o id gerado
       var numeroOS = body.numero_os || id;
-      var tecsJson = body.tecnicos_vinculados ? (Array.isArray(body.tecnicos_vinculados) ? JSON.stringify(body.tecnicos_vinculados) : String(body.tecnicos_vinculados)) : '[]';
+      var tecsJson = _normalizarTecnicosVinculados(body.tecnicos_vinculados);
       aba.appendRow([id, body.id_cliente, nomeCliente, numeroOS, body.descricao, data, 'Fase 1', '1', tecsJson]);
       SpreadsheetApp.flush();
       registrarEventoOperacional({ tipo_evento: 'CRIACAO_OS', id_os: id, numero_os: numeroOS, id_cliente: body.id_cliente, cliente: nomeCliente, acao_realizada: 'OS criada', responsavel_nome: body.responsavel || 'adm', origem: 'TapParts', observacao: body.descricao || '' });
@@ -1698,8 +1724,8 @@ function cancelarEnvioLevantamentoFieldTap(body){
   if(!body.id_os||!body.id_inspetor) return _erro('CAMPO_OBRIGATORIO','id_os e id_inspetor são obrigatórios.');
   var ss=SpreadsheetApp.getActiveSpreadsheet();
   var nome=_buscarNomeInspetor(ss, body.id_inspetor);
-  var os=_atualizarStatusFaseOS(ss, body.id_os, 'Fase 1', '1');
-  registrarEventoOperacional({tipo_evento:'CANCELAMENTO_ENVIO_FASE1_FIELDTP',id_os:body.id_os,numero_os:os.numero_os,responsavel_id:body.id_inspetor,responsavel_nome:nome,responsavel_tipo:'inspetor',origem:body.origem||'FieldTap',observacao:body.motivo||'Cancelamento para correção em campo'});
+  var os=_atualizarStatusFaseOS(ss, body.id_os, 'Em correção no campo', '1');
+  registrarEventoOperacional({tipo_evento:'CANCELAMENTO_ENVIO_FASE1_FIELDTP',id_os:body.id_os,numero_os:os.numero_os,responsavel_id:body.id_inspetor,responsavel_nome:nome,responsavel_tipo:'inspetor',origem:body.origem||'FieldTap',observacao:body.motivo||'Cancelamento para correção em campo (sem excluir itens/levantamento)'});
   return {status:'ok'};
 }
 function cancelarFechamentoFase2FieldTap(body){
