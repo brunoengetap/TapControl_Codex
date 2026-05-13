@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>FieldTap S16 — OS recentes por 3 dias com cancelamento — Engetap</title>
+<title>FieldTap S17 — Correções cirúrgicas FieldTap⇄TapParts⇄GAS — Engetap</title>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -1049,9 +1049,15 @@ async function atualizarOSFieldTap(btn) {
   if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
   setGASStatus('spin', 'Atualizando OS…');
   try {
-    const r = await gasGet('getOS', { id_inspetor: SES.inspetor.id_inspetor });
+    const insp = SES.inspetor.id_inspetor;
+    const r = await gasGet('getOS', { id_inspetor: insp });
+    console.log('[FIELDTAP_SYNC] getOS bruto', r);
+    console.log('[FIELDTAP_SYNC] id_inspetor usado', insp);
     if (r.status === 'ok') {
-      SES._osList = (r.os || []).filter(isOSVisivelFieldTapLocal);
+      const recebidas = (r.os || []);
+      console.log('[FIELDTAP_SYNC] OS recebidas', recebidas);
+      SES._osList = recebidas.filter(isOSVisivelFieldTapLocal);
+      console.log('[FIELDTAP_SYNC] OS filtradas', SES._osList);
       SES._gasOSCarregado = true;
       _lastOSRefresh = Date.now();
       setGASStatus('ok', 'GAS conectado ✓');
@@ -1087,6 +1093,31 @@ window.addEventListener('focus', () => { _tentarAutoRefreshT2(); });
 
 
 
+
+function _normalizeFaseStatusFieldTap(v) {
+  return String(v || '').trim().toLowerCase().replace(/\s+/g,' ').replace(/_/g,' ');
+}
+function _isStatusFase2FieldTap(os) {
+  const fase = _normalizeFaseStatusFieldTap(os?.fase_atual);
+  const status = _normalizeFaseStatusFieldTap(os?.status);
+  return ['2','fase 2','fase2'].includes(fase) || ['fase 2','fase2','fase_2'].includes(status);
+}
+function saveSnapshotLevantamentoFieldTap() {
+  if (!SES?.os) return;
+  const snap = { id_os: SES.os.id_os, id_levantamento: SES.os.id_levantamento || '', numero_os: SES.os.numero_os || SES.os.id_os, cliente: SES.os.cliente || '', fase: SES.os.fase_atual || SES.os.fase || '1', equipamentos: SES.equipamentos || [], levantamento: SES.levantamento || {}, timestamp: new Date().toISOString(), inspetor: SES.inspetor || null };
+  try { localStorage.setItem('fieldtap_snapshot_' + SES.os.id_os, JSON.stringify(snap)); } catch(e) {}
+}
+function restoreSnapshotLevantamentoFieldTap(idOS) {
+  try {
+    const raw = localStorage.getItem('fieldtap_snapshot_' + idOS); if (!raw) return false;
+    const snap = JSON.parse(raw);
+    if (!snap || !snap.id_os) return false;
+    if (SES.os && SES.os.id_os === idOS) { SES.equipamentos = snap.equipamentos || SES.equipamentos || []; SES.levantamento = snap.levantamento || SES.levantamento || {}; }
+    console.log('[CANCELAMENTO_ENVIO] Snapshot restaurado para', idOS, snap);
+    return true;
+  } catch(e){ return false; }
+}
+
 const RETENCAO_DIAS_FIELDTAP = 3;
 function getRetencaoFieldTapKey(){ const id=(SES.inspetor?.id_inspetor||'anon').toString().trim(); return `fieldtap_os_recentes_${id}`; }
 function getFimTerceiroDiaLocal(baseIso){ const dt = baseIso ? new Date(baseIso) : new Date(); const fim = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate() + RETENCAO_DIAS_FIELDTAP, 23, 59, 59, 999); return fim.toISOString(); }
@@ -1095,13 +1126,13 @@ function saveFieldTapRecentesStore(store){ try{ localStorage.setItem(getRetencao
 function isDentroRetencao3Dias(ts,expira){ const limite = expira?new Date(expira):new Date(getFimTerceiroDiaLocal(ts)); return Date.now() <= limite.getTime(); }
 function limparOSRecentesExpiradas(store){ const now=Date.now(); ['fase1_enviadas','fase2_concluidas'].forEach(k=>{ Object.keys(store[k]||{}).forEach(id=>{ const r=store[k][id]; const exp=r?.expira_em?new Date(r.expira_em).getTime():new Date(getFimTerceiroDiaLocal(r?.timestamp_envio||r?.timestamp_fechamento)).getTime(); if(!exp||now>exp) delete store[k][id]; }); }); saveFieldTapRecentesStore(store); return store; }
 function isOSVisivelFieldTapLocal(o) {
-  const fase = String(o?.fase_atual || '').trim().toLowerCase();
-  const status = String(o?.status || '').trim().toLowerCase();
-  if (['encerrada','encerrado','finalizada','finalizado'].includes(status)) return false;
-  if (fase === 'aguardando_tapparts' || status === 'aguardando tapparts') return false;
-  if (fase === 'campo_concluido' || status === 'fase 2 campo concluída') return false;
+  const fase = _normalizeFaseStatusFieldTap(o?.fase_atual);
+  const status = _normalizeFaseStatusFieldTap(o?.status);
+  if (['encerrada','encerrado','finalizada','finalizado','concluido'].includes(status)) return false;
+  if (fase === 'aguardando tapparts' || status === 'aguardando tapparts') return false;
+  if (fase === 'campo concluido' || status === 'fase 2 campo concluida') return false;
   const isF1 = fase === '1' || status === 'fase 1';
-  const isF2 = fase === '2' || status === 'fase 2';
+  const isF2 = _isStatusFase2FieldTap(o);
   return isF1 || isF2;
 }
 
@@ -1877,6 +1908,7 @@ async function enviarLevantamento(btn) {
   showLoading('Enviando levantamento…');
   const allItems = [];
   Object.values(lev).forEach(items => items.forEach(it => allItems.push(it)));
+  saveSnapshotLevantamentoFieldTap();
   const payload = {
     id_inspetor: SES.inspetor.id_inspetor,
     id_os: SES.os.id_os,
@@ -1923,6 +1955,7 @@ async function cancelarEnvioOS(idOS) {
     const store = getFieldTapRecentesStore(); delete store.fase1_enviadas[idOS]; saveFieldTapRecentesStore(store);
     if (SES._osEnviadas) SES._osEnviadas.delete(idOS);
     await atualizarOSFieldTap(null); renderT2();
+    restoreSnapshotLevantamentoFieldTap(idOS);
     showToast('Envio cancelado. OS liberada para correção.');
   } catch(e){ showToast(e.message || 'Erro ao cancelar envio', 'err'); }
 }
@@ -2095,7 +2128,8 @@ async function confirmarItemF2(btn) {
 
   // Envia ao GAS
   if (GAS_URL) {
-    const payload = {
+    saveSnapshotLevantamentoFieldTap();
+  const payload = {
       id_item: it.id_item,
       status: it.status,
       data_instalacao: data,
