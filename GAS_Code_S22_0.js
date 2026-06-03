@@ -51,6 +51,12 @@
 // =============================================================================
 
 // =============================================================================
+// CONFIGURAÇÃO
+// =============================================================================
+
+var DRIVE_LINK_PUBLICO = false; // false = acesso restrito (recomendado para contexto industrial)
+
+// =============================================================================
 // SETUP
 // =============================================================================
 
@@ -61,7 +67,7 @@ function setupPlanilha() {
   _criarAba(ss, 'CLIENTES',        ['id_cliente','nome','cnpj','endereco','contato','observacoes','ativo']);
   _criarAba(ss, 'OS',              ['id_os','id_cliente','cliente','numero_os','descricao','data_abertura','status','fase_atual','tecnicos_vinculados']);
   _criarAba(ss, 'EQUIPAMENTOS',    ['id_equipamento','id_cliente','id_os','tipo','tag','localizacao','pmta','campo_livre','cadastrado_por','ativo']);
-  _criarAba(ss, 'LEVANTAMENTOS',   ['id_levantamento','id_os','id_cliente','id_inspetor','nome_inspetor','fase','timestamp_envio','total_itens','status_geral']);
+  _criarAba(ss, 'LEVANTAMENTOS',   ['id_levantamento','id_os','id_cliente','id_inspetor','nome_inspetor','fase','timestamp_envio','total_itens','status_geral','drive_folder_id','drive_folder_url','quantidade_fotos_equip','quantidade_fotos_ponto','fotos_equip_json','fotos_ponto_json']);
   _criarAba(ss, 'ITENS', [
     'id_item','id_levantamento','id_os','id_cliente','id_equipamento','tag_equipamento',
     'tipo_acessorio','id_item_catalogo','descricao_curta','quantidade',
@@ -125,6 +131,11 @@ function setupPlanilha() {
     'tipo_calibracao','num_lacre2','observacao_cotacao',
     'foto_equipamento_b64','foto_ponto_instalacao_b64'
   ]);
+  _garantirColunas(ss, 'LEVANTAMENTOS', [
+    'drive_folder_id','drive_folder_url',
+    'quantidade_fotos_equip','quantidade_fotos_ponto',
+    'fotos_equip_json','fotos_ponto_json'
+  ]);
   _garantirColunas(ss, 'CAT_VALVULAS', [
     'tipo_valvula','tipo_entrada','tipo_saida','tipo_rosca',
     'pa_alivio','pa_alivio_unidade','pa_vacuo','pa_vacuo_unidade',
@@ -163,6 +174,53 @@ function _garantirColunas(ss, nomeAba, colunasObrigatorias) {
   aba.getRange(1, colInicio, 1, ausentes.length).setValues([ausentes])
      .setFontWeight('bold').setBackground('#1F4E79').setFontColor('#FFFFFF');
   Logger.log('_garantirColunas: ' + nomeAba + ' — adicionadas: ' + ausentes.join(', '));
+}
+
+
+function norm(v) {
+  return String(v || '').trim();
+}
+
+function getOrCreateDrivePath(partes) {
+  var pasta = DriveApp.getRootFolder();
+  partes.forEach(function(nome) {
+    var it = pasta.getFoldersByName(nome);
+    pasta = it.hasNext() ? it.next() : pasta.createFolder(nome);
+  });
+  return pasta;
+}
+
+function dataUrlToBlob(dataUrl, nome) {
+  var arr = String(dataUrl || '').split(',');
+  var mimeMatch = arr[0].match(/:(.*?);/);
+  var mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+  var ext = mime.split('/')[1] === 'png' ? '.png' : '.jpg';
+  var bytes = Utilities.base64Decode(arr[1] || '');
+  return Utilities.newBlob(bytes, mime, nome + ext);
+}
+
+function sanitizeFileName(s) {
+  return String(s || '').replace(/[^\w\-_.]/g, '_').substring(0, 80);
+}
+
+function _setColIfExists(aba, rowNum, cab, col, val) {
+  var idx = cab.indexOf(col);
+  if (idx >= 0) aba.getRange(rowNum, idx + 1).setValue(val);
+}
+
+function logErro(contexto, msg, detalhe) {
+  try {
+    Logger.log('[ERRO] ' + contexto + ': ' + msg + (detalhe ? ' — ' + detalhe : ''));
+    registrarEventoOperacional({
+      tipo_evento: 'ERRO_SISTEMA',
+      acao_realizada: contexto,
+      origem: 'GAS',
+      observacao: msg || '',
+      payload_json: detalhe || ''
+    });
+  } catch(e) {
+    Logger.log('logErro falhou: ' + e.message);
+  }
 }
 
 function _popularDadosDeTeste(ss) {
@@ -284,6 +342,8 @@ function doGet(e) {
       case 'getLevantamentosByCliente': resultado = getLevantamentosByCliente(params); break;
       case 'getLevantamentosByOS':      resultado = getLevantamentosByOS(params);      break;
       case 'getItensByLevantamento':    resultado = getItensByLevantamento(params);    break;
+      case 'getFotoBase64':              resultado = getFotoBase64(params);              break;
+      case 'getLevantamentosComFotos':   resultado = getLevantamentosComFotos(params);   break;
       case 'getItensByOS':              resultado = getItensByOS(params);              break;
       case 'getInspetores':             resultado = getInspetores(params);             break;
       // Sprint 6 — Histórico
@@ -578,6 +638,115 @@ function getLevantamentosByOS(params) {
   return { status: 'ok', levantamentos: lista };
 }
 
+
+function getLevantamentosComFotos(params) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  _garantirColunas(ss, 'LEVANTAMENTOS', [
+    'drive_folder_id','drive_folder_url',
+    'quantidade_fotos_equip','quantidade_fotos_ponto',
+    'fotos_equip_json','fotos_ponto_json'
+  ]);
+  var aba = ss.getSheetByName('LEVANTAMENTOS');
+  if (!aba || aba.getLastRow() < 2) return { status: 'ok', levantamentos: [] };
+  var dados = aba.getDataRange().getValues();
+  var cab = dados[0];
+  var osMap = _carregarMapaOS(ss);
+  var lista = [];
+  for (var i = 1; i < dados.length; i++) {
+    var obj = _linhaParaObjeto(cab, dados[i]);
+    if (obj.drive_folder_id || parseInt(obj.quantidade_fotos_equip, 10) > 0 || parseInt(obj.quantidade_fotos_ponto, 10) > 0) {
+      var infoOS = osMap[String(obj.id_os)];
+      if (infoOS) {
+        obj.cliente = obj.cliente || infoOS.cliente || '';
+        obj.numero_os = obj.numero_os || infoOS.numero_os || '';
+        obj.id_cliente = obj.id_cliente || infoOS.id_cliente || '';
+      }
+      lista.push(obj);
+    }
+  }
+  lista.sort(function(a, b) { return String(b.timestamp_envio).localeCompare(String(a.timestamp_envio)); });
+  return { status: 'ok', levantamentos: lista };
+}
+
+function getFotoBase64(params) {
+  var fileId = norm(params && params.file_id);
+  if (!fileId) return { status: 'erro', mensagem: 'file_id obrigatório' };
+  try {
+    var file = DriveApp.getFileById(fileId);
+    var blob = file.getBlob();
+    return {
+      status: 'ok',
+      base64: Utilities.base64Encode(blob.getBytes()),
+      mimeType: blob.getContentType() || 'image/jpeg'
+    };
+  } catch(e) {
+    logErro('getFotoBase64', e.message, JSON.stringify({ file_id: fileId }));
+    return { status: 'erro', mensagem: 'Erro ao buscar foto: ' + e.message };
+  }
+}
+
+function salvarFotosDriveTapControl(body) {
+  var resp = {
+    drive_folder_id: '', drive_folder_url: '',
+    fotos_salvas_equip: [], fotos_salvas_ponto: [],
+    fotos_com_erro: [],
+    quantidade_fotos_equip: 0,
+    quantidade_fotos_ponto: 0
+  };
+
+  var folder;
+  if (body.drive_folder_id_existente) {
+    try { folder = DriveApp.getFolderById(body.drive_folder_id_existente); } catch(e) { folder = null; }
+  }
+  if (!folder) {
+    var ym = Utilities.formatDate(new Date(), 'America/Sao_Paulo', 'yyyy-MM');
+    folder = getOrCreateDrivePath([
+      'TapControl_Fotos', ym,
+      '[' + sanitizeFileName(body.id_os || body.numero_os || 'SEM_OS') + ']',
+      '[' + sanitizeFileName(body.id_levantamento || 'SEM_LEV') + ']'
+    ]);
+  }
+  if (DRIVE_LINK_PUBLICO) {
+    try { folder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch(e) {}
+  }
+  resp.drive_folder_id = folder.getId();
+  resp.drive_folder_url = folder.getUrl();
+
+  Object.keys(body.fotos_equipamentos || {}).forEach(function(idEquip) {
+    var dataUrl = body.fotos_equipamentos[idEquip];
+    if (!dataUrl || typeof dataUrl !== 'string' || dataUrl.indexOf('data:') !== 0) return;
+    try {
+      var nome = sanitizeFileName('equip_' + idEquip);
+      var existing = folder.getFilesByName(nome + '.jpg');
+      var arq = existing.hasNext() ? existing.next() : folder.createFile(dataUrlToBlob(dataUrl, nome));
+      if (DRIVE_LINK_PUBLICO) { try { arq.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch(e) {} }
+      resp.fotos_salvas_equip.push({ id_equipamento: idEquip, file_id: arq.getId(), file_url: arq.getUrl() });
+    } catch(err) {
+      resp.fotos_com_erro.push({ key: 'equip_' + idEquip, erro: err.message });
+      logErro('salvarFotosDriveTapControl/equip', err.message, idEquip);
+    }
+  });
+
+  Object.keys(body.fotos_pontos_instalacao || {}).forEach(function(tipoKey) {
+    var dataUrl = body.fotos_pontos_instalacao[tipoKey];
+    if (!dataUrl || typeof dataUrl !== 'string' || dataUrl.indexOf('data:') !== 0) return;
+    try {
+      var nome = sanitizeFileName('ponto_' + tipoKey);
+      var existing = folder.getFilesByName(nome + '.jpg');
+      var arq = existing.hasNext() ? existing.next() : folder.createFile(dataUrlToBlob(dataUrl, nome));
+      if (DRIVE_LINK_PUBLICO) { try { arq.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch(e) {} }
+      resp.fotos_salvas_ponto.push({ tipo_key: tipoKey, file_id: arq.getId(), file_url: arq.getUrl() });
+    } catch(err) {
+      resp.fotos_com_erro.push({ key: 'ponto_' + tipoKey, erro: err.message });
+      logErro('salvarFotosDriveTapControl/ponto', err.message, tipoKey);
+    }
+  });
+
+  resp.quantidade_fotos_equip = resp.fotos_salvas_equip.length;
+  resp.quantidade_fotos_ponto = resp.fotos_salvas_ponto.length;
+  return resp;
+}
+
 // [LEV_ENRICH] S17 — auxiliar reutilizável (lê OS uma vez, devolve map)
 function _carregarMapaOS(ss) {
   var dadosOS = ss.getSheetByName('OS').getDataRange().getValues();
@@ -847,6 +1016,12 @@ function enviarLevantamento(body) {
   try {
     lock.waitLock(15000);
 
+    _garantirColunas(ss, 'LEVANTAMENTOS', [
+      'drive_folder_id','drive_folder_url',
+      'quantidade_fotos_equip','quantidade_fotos_ponto',
+      'fotos_equip_json','fotos_ponto_json'
+    ]);
+
     var nomeInspetor = _buscarNomeInspetor(ss, body.id_inspetor);
     var timestamp = body.timestamp || new Date().toISOString();
     var fase = body.fase || '1';
@@ -946,18 +1121,6 @@ function enviarLevantamento(body) {
 
       // S18 — mapeamento dinâmico por cabeçalho para incluir colunas novas automaticamente
       var cabItensH = abaItens.getRange(1, 1, 1, abaItens.getLastColumn()).getValues()[0];
-      // S21 — fotos enviadas pelo TCF
-      var fotoEquip = (body.fotos_equipamentos && item.id_equipamento)
-        ? (body.fotos_equipamentos[item.id_equipamento] || '')
-        : '';
-      var tipoKey = (item.tipo || item.tipo_acessorio_key || item.tipo_acessorio || '')
-        .toLowerCase()
-        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-        .replace(/\s+/g, '_')
-        .replace(/ã/g, 'a').replace(/ç/g, 'c');
-      var fotoPonto = (body.fotos_pontos_instalacao && item.id_equipamento)
-        ? (body.fotos_pontos_instalacao[item.id_equipamento + '_' + tipoKey] || '')
-        : '';
       var itemBase = {
         id_item:                  idItem,
         id_levantamento:          idLevantamento,
@@ -991,8 +1154,8 @@ function enviarLevantamento(body) {
         origem_item_manual:       item._veio_de_outro ? 'manual/outro' : '',
         dados_item_manual_json:   JSON.stringify({ tipo: item.tipo, tipo_acessorio: item.tipo_acessorio, descricao: item.descricao, desc_curta: item.descricao_curta }),
         payload_item_json:        JSON.stringify(item),  // blindagem — nenhum campo futuro se perde
-        foto_equipamento_b64:      fotoEquip,
-        foto_ponto_instalacao_b64: fotoPonto
+        foto_equipamento_b64:      '',  // S22 — base64 não gravado; fotos ficam no Drive
+        foto_ponto_instalacao_b64: ''   // metadados gravados na aba LEVANTAMENTOS
       };
       var linhaItem = cabItensH.map(function(col) { return itemBase[col] !== undefined ? itemBase[col] : ''; });
       abaItens.appendRow(linhaItem);
@@ -1018,9 +1181,73 @@ function enviarLevantamento(body) {
       registrarEventoOperacional({ tipo_evento: 'FASE1_ENVIADA_FIELDTP', id_os: body.id_os, id_cliente: id_cliente, acao_realizada: 'Fase 1 enviada pelo TapControl Field; aguardando tratamento no TapControl Manager', responsavel_id: body.id_inspetor, responsavel_nome: nomeInspetor, responsavel_tipo: 'inspetor', origem: 'TapControl Field' });
     }
 
+    // ── FOTOS NO DRIVE ──
+    var fotosInfo = {
+      drive_folder_id: '', drive_folder_url: '',
+      fotos_salvas_equip: [], fotos_salvas_ponto: [],
+      fotos_com_erro: [],
+      quantidade_fotos_equip: 0, quantidade_fotos_ponto: 0
+    };
+    var temFotos = (body.fotos_equipamentos && Object.keys(body.fotos_equipamentos).some(function(k){ return !!body.fotos_equipamentos[k]; })) ||
+                   (body.fotos_pontos_instalacao && Object.keys(body.fotos_pontos_instalacao).some(function(k){ return !!body.fotos_pontos_instalacao[k]; }));
+
+    if (temFotos) {
+      try {
+        var driveIdExistente = '';
+        var abaLevCheck = ss.getSheetByName('LEVANTAMENTOS');
+        var dadosLevCheck = abaLevCheck.getDataRange().getValues();
+        var cabLevCheck = dadosLevCheck[0];
+        for (var lc = 1; lc < dadosLevCheck.length; lc++) {
+          if (String(dadosLevCheck[lc][cabLevCheck.indexOf('id_levantamento')] || '') === String(idLevantamento)) {
+            driveIdExistente = String(dadosLevCheck[lc][cabLevCheck.indexOf('drive_folder_id')] || '');
+            break;
+          }
+        }
+        fotosInfo = salvarFotosDriveTapControl({
+          id_os: body.id_os,
+          id_levantamento: idLevantamento,
+          id_inspetor: body.id_inspetor,
+          numero_os: body.numero_os || body.id_os,
+          drive_folder_id_existente: driveIdExistente,
+          fotos_equipamentos: body.fotos_equipamentos || {},
+          fotos_pontos_instalacao: body.fotos_pontos_instalacao || {}
+        });
+      } catch(errFotos) {
+        logErro('enviarLevantamento/fotos', errFotos.message, body.id_os);
+      }
+    }
+
+    if (fotosInfo.drive_folder_id) {
+      var abaLevF = ss.getSheetByName('LEVANTAMENTOS');
+      var dadosLevF = abaLevF.getDataRange().getValues();
+      var cabLevF = dadosLevF[0];
+      for (var lf = 1; lf < dadosLevF.length; lf++) {
+        if (String(dadosLevF[lf][cabLevF.indexOf('id_levantamento')] || '') === String(idLevantamento)) {
+          _setColIfExists(abaLevF, lf + 1, cabLevF, 'drive_folder_id', fotosInfo.drive_folder_id);
+          _setColIfExists(abaLevF, lf + 1, cabLevF, 'drive_folder_url', fotosInfo.drive_folder_url);
+          _setColIfExists(abaLevF, lf + 1, cabLevF, 'quantidade_fotos_equip', fotosInfo.quantidade_fotos_equip);
+          _setColIfExists(abaLevF, lf + 1, cabLevF, 'quantidade_fotos_ponto', fotosInfo.quantidade_fotos_ponto);
+          _setColIfExists(abaLevF, lf + 1, cabLevF, 'fotos_equip_json', JSON.stringify(fotosInfo.fotos_salvas_equip));
+          _setColIfExists(abaLevF, lf + 1, cabLevF, 'fotos_ponto_json', JSON.stringify(fotosInfo.fotos_salvas_ponto));
+          SpreadsheetApp.flush();
+          break;
+        }
+      }
+    }
+
     SpreadsheetApp.flush();
     registrarEventoOperacional({ tipo_evento: 'ENVIO_LEVANTAMENTO', id_os: body.id_os, id_cliente: id_cliente, acao_realizada: 'Levantamento enviado pelo TapControl Field', responsavel_id: body.id_inspetor, responsavel_nome: nomeInspetor, responsavel_tipo: 'inspetor', origem: 'TapControl Field', observacao: 'Total itens: ' + body.itens.length, payload_json: JSON.stringify({ id_levantamento: idLevantamento }) });
-    return { status: 'ok', id_levantamento: idLevantamento, itens_criados: itensCriados };
+    return {
+      status: 'ok',
+      id_levantamento: idLevantamento,
+      itens_criados: itensCriados,
+      fotos: {
+        drive_folder_url: fotosInfo.drive_folder_url || '',
+        quantidade_fotos_equip: fotosInfo.quantidade_fotos_equip || 0,
+        quantidade_fotos_ponto: fotosInfo.quantidade_fotos_ponto || 0,
+        erros: (fotosInfo.fotos_com_erro || []).length
+      }
+    };
 
   } finally { lock.releaseLock(); }
 }
