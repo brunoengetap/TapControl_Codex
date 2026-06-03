@@ -3280,6 +3280,13 @@ function showRevision() {
         ➕ Adicionar item a ${e.tag}
       </div></div>`;
     });
+    const totalFotosEquip = Object.values(SES.fotoEquipamento || {}).filter(Boolean).length;
+    const totalFotosPonto = Object.values(SES.fotoPontoInstalacao || {}).filter(Boolean).length;
+    const totalFotos = totalFotosEquip + totalFotosPonto;
+    const fotosResumo = totalFotos > 0
+      ? `📷 ${totalFotos} foto(s) (${totalFotosEquip} equip. + ${totalFotosPonto} ponto)`
+      : '📷 Sem fotos';
+    html += `<div class="summary-card" style="margin-top:12px"><b>${fotosResumo}</b></div>`;
     document.getElementById('tr-body').innerHTML = html;
   }
   goTo('tr');
@@ -3357,6 +3364,16 @@ async function enviarLevantamento(btn) {
     if (r && r.status === 'ok') {
       levId = r.id_levantamento || levId;
       enviado = true;
+      // Feedback de fotos salvas no Drive
+      if (r.fotos) {
+        const totalFotos = (r.fotos.quantidade_fotos_equip || 0) + (r.fotos.quantidade_fotos_ponto || 0);
+        if (totalFotos > 0) {
+          console.log('[FOTOS] Salvas no Drive:', totalFotos, '— Pasta:', r.fotos.drive_folder_url);
+        }
+        if (r.fotos.erros > 0) {
+          showToast(`⚠️ ${r.fotos.erros} foto(s) não puderam ser salvas no Drive.`, 'warn');
+        }
+      }
     } else {
       hideLoading();
       showToast('Falha ao enviar. Os dados foram mantidos para nova tentativa.', 'err');

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TapControl Manager — S22.0 — Engetap</title>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
 :root {
   --bg:      #f0f4f9;
@@ -436,6 +437,9 @@ code { font-size: 11px; color: var(--accent); font-family: monospace; }
     <span class="ni-icon">📥</span> Levantamentos TapControl Field
     <span class="ni-badge warn" id="badge-lev">0</span>
   </div>
+  <div class="nav-item" onclick="setView('fotos',this)" id="nav-fotos">
+    <span class="ni-icon">📷</span> Fotos / Drive
+  </div>
 
   <div class="nav-section">Catálogos</div>
   <div class="nav-item" onclick="setView('catalogo',this)" id="nav-catalogo">
@@ -750,6 +754,19 @@ code { font-size: 11px; color: var(--accent); font-family: monospace; }
       </div>
       <div id="lev-container">
         <div class="empty-state"><div class="ei">📥</div>Nenhum levantamento recebido ainda</div>
+      </div>
+    </div>
+
+    <!-- ══ VIEW: FOTOS / DRIVE ══ -->
+    <div class="view" id="view-fotos">
+      <div class="filter-bar">
+        <div class="search-wrap">
+          <input type="text" id="fotos-search" placeholder="Buscar por OS, inspetor, levantamento..." oninput="renderViewFotos()">
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="carregarViewFotos()" style="margin-left:auto">🔄 Atualizar</button>
+      </div>
+      <div id="fotos-container">
+        <div class="empty-state"><div class="ei">📷</div>Clique em Atualizar para carregar levantamentos com fotos</div>
       </div>
     </div>
 
@@ -1430,6 +1447,12 @@ code { font-size: 11px; color: var(--accent); font-family: monospace; }
 </div>
 
 <div id="toast"></div>
+<div id="rel-progress-wrap" style="display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--nav);color:#fff;border-radius:10px;padding:12px 20px;min-width:300px;z-index:9999;box-shadow:0 4px 24px rgba(0,0,0,.3)">
+  <div style="font-size:12px;margin-bottom:6px" id="rel-progress-label">Carregando fotos…</div>
+  <div style="background:rgba(255,255,255,.2);border-radius:4px;height:6px">
+    <div id="rel-progress-bar" style="background:var(--accent);border-radius:4px;height:6px;width:0%;transition:width .3s"></div>
+  </div>
+</div>
 
 <script>
 // ═══════════════════════════════════════════════════════════════
@@ -1438,6 +1461,11 @@ code { font-size: 11px; color: var(--accent); font-family: monospace; }
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbzaYkBqamEi21pTaBl_LYAhj9JkkxwFGfapWMrUCnfTCA7BMV9O5D0fWQeQP2fmGnKd/exec'; // TODO: colar URL do GAS aqui
 // S17.2-Beta-RC1 — Cliente nos levantamentos, remoção real, fix salvarItemCatalogo, bloqueio dups, Registro Segurança
 const APP_VERSION = 'S22.0';
+// Logo Engetap em PNG base64 — não há ColectTap Manager v1.19 disponível neste recorte do repo.
+const LOGO_ENGETAP_B64 = '';
+window.CACHE = window.CACHE || {};
+const CACHE = window.CACHE;
+function s(val) { return String(val || ''); }
 
 // ═══════════════════════════════════════════════════════════════
 // ESTADO LOCAL (banco de dados em memória enquanto GAS não está conectado)
@@ -2202,6 +2230,10 @@ function renderLevantamentos() {
     // [LEV_CLIENTE] S17 — sempre mostra cliente via helpers (não confia em DB.os direto)
     const osLabel = `OS ${numeroOSDoLevantamento(l)} · Cliente: ${clienteDoLevantamento(l)}`;
     const faseLabel = String(l.fase) === '2' ? '<span class="phase-badge phase-2" style="font-size:10px;padding:1px 6px">Fase 2</span>' : '<span class="phase-badge phase-1" style="font-size:10px;padding:1px 6px">Fase 1</span>';
+    const nFotosLev = (parseInt(l.quantidade_fotos_equip) || 0) + (parseInt(l.quantidade_fotos_ponto) || 0);
+    const btnPDFLev = nFotosLev > 0
+      ? `<button class="btn btn-primary btn-sm" onclick="gerarPDFLevantamento('${s(l.id_levantamento)}')" title="${nFotosLev} foto(s) disponível/eis">📄 PDF</button>`
+      : `<button class="btn btn-ghost btn-sm" style="opacity:.45" disabled title="Sem fotos para PDF">📄</button>`;
     return `<div class="lev-card">
       <div class="lev-card-hdr">
         <div>
@@ -2210,6 +2242,7 @@ function renderLevantamentos() {
         </div>
         <div style="display:flex;gap:6px;align-items:center">
           <span class="badge badge-blue">${l.total_itens} iten${l.total_itens!=1?'s':'s'}</span>
+          ${btnPDFLev}
           <button class="btn btn-ghost btn-sm" onclick="verDetalheLev('${l.id_levantamento}')">👁 Ver itens</button>
         </div>
       </div>
@@ -4648,10 +4681,172 @@ const VIEW_CONFIG = {
   equipamentos:  { title: 'Equipamentos',                btnLabel: '+ Novo Equipamento', newFn: () => abrirModalEquip() },
   tecnicos:      { title: 'Técnicos de Campo',           btnLabel: '+ Novo Técnico',     newFn: () => abrirModalTecnico() },
   levantamentos: { title: 'Levantamentos TapControl Field', btnLabel: '📋 Buscar Levantamentos',   newFn: () => syncLevantamentos().then(renderLevantamentos) },
+  fotos:         { title: 'Fotos / Drive',                  btnLabel: '🔄 Atualizar',              newFn: () => carregarViewFotos() },
   catalogo:      { title: 'Catálogo de Peças',           btnLabel: '+ Novo Item',        newFn: () => abrirModalCatalogo() },
   kits:          { title: 'Kits de Instalação',          btnLabel: '+ Novo Kit',         newFn: () => abrirModalKit() },
   historico:     { title: 'Histórico / Banco de Dados',   btnLabel: '🔄 Atualizar',        newFn: () => buscarHistoricoOS() },
 };
+
+
+async function carregarViewFotos() {
+  const el = document.getElementById('fotos-container');
+  if (el) el.innerHTML = '<div class="empty-state"><div class="ei">⏳</div>Carregando…</div>';
+  try {
+    const r = await gasGet('getLevantamentosComFotos');
+    CACHE.levantamentosComFotos = r.levantamentos || [];
+    renderViewFotos();
+  } catch(e) {
+    if (el) el.innerHTML = '<div class="empty-state"><div class="ei">⚠️</div>Erro ao carregar fotos: ' + e.message + '</div>';
+  }
+}
+
+function renderViewFotos() {
+  const lista = CACHE.levantamentosComFotos || [];
+  const q = (document.getElementById('fotos-search')?.value || '').toLowerCase();
+  const filtrada = lista.filter(l => !q ||
+    String(l.id_os || '').toLowerCase().includes(q) ||
+    String(l.id_levantamento || '').toLowerCase().includes(q) ||
+    String(l.nome_inspetor || '').toLowerCase().includes(q) ||
+    String(l.cliente || '').toLowerCase().includes(q));
+  const el = document.getElementById('fotos-container');
+  if (!el) return;
+  if (!filtrada.length) {
+    el.innerHTML = '<div class="empty-state"><div class="ei">📷</div>Nenhum levantamento com fotos encontrado</div>';
+    return;
+  }
+  el.innerHTML = `
+    <div style="font-size:12px;color:var(--text2);margin-bottom:12px">${filtrada.length} levantamento${filtrada.length!==1?'s':''} com fotos</div>
+    <table class="data-table"><thead><tr>
+      <th>Levantamento</th><th>OS</th><th>Cliente</th><th>Inspetor</th><th>Fase</th>
+      <th style="text-align:center">📷 Equip.</th><th style="text-align:center">📷 Ponto</th><th>Pasta Drive</th><th>Ações</th>
+    </tr></thead><tbody>
+      ${filtrada.map(l => {
+        const nEquip = parseInt(l.quantidade_fotos_equip) || 0;
+        const nPonto = parseInt(l.quantidade_fotos_ponto) || 0;
+        const driveBtn = l.drive_folder_url ? `<a href="${s(l.drive_folder_url)}" target="_blank" class="btn btn-ghost btn-sm" style="font-size:11px;text-decoration:none">📁 Abrir</a>` : '—';
+        const pdfBtn = (nEquip + nPonto) > 0 ? `<button class="btn btn-primary btn-sm" onclick="gerarPDFLevantamento('${s(l.id_levantamento)}')">📄 PDF</button>` : `<button class="btn btn-ghost btn-sm" disabled title="Sem fotos">📄 PDF</button>`;
+        return `<tr>
+          <td><code style="font-size:11px">${s(l.id_levantamento)}</code></td><td>${s(l.numero_os || l.id_os)}</td><td>${s(l.cliente)}</td><td>${s(l.nome_inspetor)}</td>
+          <td>${String(l.fase)==='2'?'<span class="phase-badge phase-2">F2</span>':'<span class="phase-badge phase-1">F1</span>'}</td>
+          <td style="text-align:center">${nEquip || '—'}</td><td style="text-align:center">${nPonto || '—'}</td><td>${driveBtn}</td><td style="display:flex;gap:4px">${pdfBtn}</td>
+        </tr>`;
+      }).join('')}
+    </tbody></table>`;
+}
+
+async function _buscarFotosLevantamento(levantamento) {
+  const wrap = document.getElementById('rel-progress-wrap');
+  const bar = document.getElementById('rel-progress-bar');
+  const label = document.getElementById('rel-progress-label');
+  const tarefasEquip = [];
+  const tarefasPonto = [];
+  try { JSON.parse(s(levantamento.fotos_equip_json) || '[]').forEach(f => { if (f.file_id) tarefasEquip.push(f); }); } catch(e) {}
+  try { JSON.parse(s(levantamento.fotos_ponto_json) || '[]').forEach(f => { if (f.file_id) tarefasPonto.push(f); }); } catch(e) {}
+  const todas = [...tarefasEquip, ...tarefasPonto];
+  const resultadoEquip = new Map();
+  const resultadoPonto = new Map();
+  if (!todas.length) return { equip: resultadoEquip, ponto: resultadoPonto };
+  if (wrap) wrap.style.display = 'block';
+  if (bar) bar.style.width = '0%';
+  for (let i = 0; i < todas.length; i++) {
+    const t = todas[i];
+    const labelTxt = t.id_equipamento ? `Equip. ${t.id_equipamento}` : `Ponto ${t.tipo_key}`;
+    if (label) label.textContent = `Carregando foto ${i+1}/${todas.length}: ${labelTxt}`;
+    if (bar) bar.style.width = Math.round(((i+1)/todas.length)*100) + '%';
+    try {
+      const r = await gasGet('getFotoBase64', { file_id: t.file_id });
+      if (r.status === 'ok' && r.base64) {
+        if (t.id_equipamento) resultadoEquip.set(t.id_equipamento, { base64: r.base64, mimeType: r.mimeType || 'image/jpeg' });
+        if (t.tipo_key) resultadoPonto.set(t.tipo_key, { base64: r.base64, mimeType: r.mimeType || 'image/jpeg' });
+      }
+    } catch(e) { console.warn('[PDF] Foto não carregada:', t.file_id, e.message); }
+  }
+  if (label) label.textContent = '✅ Fotos carregadas!';
+  setTimeout(() => { if (wrap) wrap.style.display = 'none'; }, 1500);
+  return { equip: resultadoEquip, ponto: resultadoPonto };
+}
+
+async function gerarPDFLevantamento(idLevantamento) {
+  if (!window.jspdf) { showToast('⚠️ Biblioteca PDF não carregada ainda. Aguarde e tente novamente.', 'warn'); return; }
+  let lev = (CACHE.levantamentosComFotos || []).find(l => l.id_levantamento === idLevantamento);
+  if (!lev) lev = (DB.levantamentos || []).find(l => l.id_levantamento === idLevantamento);
+  if (!lev) { showToast('Levantamento não encontrado. Sincronize os dados primeiro.', 'err'); return; }
+  showToast('Buscando itens do levantamento…');
+  let itens = [];
+  try { const ri = await gasGet('getItensByLevantamento', { id_levantamento: idLevantamento }); itens = ri.itens || []; }
+  catch(e) { showToast('Erro ao buscar itens: ' + e.message, 'err'); return; }
+  showToast('Carregando fotos do Drive…');
+  const fotosMap = await _buscarFotosLevantamento(lev);
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const PW = 210, PH = 297, ML = 14, MR = 14, CW = PW - ML - MR;
+  const ltx = t => (t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const sv = v => String(v || '').trim();
+  const addImg = (foto, x, y, maxW, maxH) => {
+    if (!foto) return 0;
+    try {
+      const mt = (foto.mimeType || '').toUpperCase().includes('PNG') ? 'PNG' : 'JPEG';
+      const imgSrc = 'data:' + foto.mimeType + ';base64,' + foto.base64;
+      const props = doc.getImageProperties(imgSrc);
+      const imgW = maxW;
+      const imgH = Math.min(imgW * (props.height / props.width), maxH);
+      doc.addImage(imgSrc, mt, x, y, imgW, imgH);
+      return imgH;
+    } catch(e) { return 0; }
+  };
+
+  if (LOGO_ENGETAP_B64) { try { doc.addImage('data:image/png;base64,' + LOGO_ENGETAP_B64, 'PNG', PW/2 - 40, 18, 80, 27); } catch(e) {} }
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(16); doc.setTextColor(13, 27, 42);
+  doc.text(ltx('RELATÓRIO DE ACESSÓRIOS NR-13'), PW/2, 58, { align: 'center' });
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(74, 104, 130);
+  doc.text(`OS: ${ltx(sv(lev.numero_os || lev.id_os))}`, PW/2, 66, { align: 'center' });
+  doc.text(ltx(`Inspetor: ${sv(lev.nome_inspetor)}  |  Fase: ${sv(lev.fase)}`), PW/2, 72, { align: 'center' });
+  doc.text(ltx(`Levantamento: ${sv(lev.id_levantamento)}  |  ${sv(lev.cliente)}`), PW/2, 78, { align: 'center' });
+  if (fotosMap.equip.size > 0) addImg(fotosMap.equip.values().next().value, ML + CW * 0.125, 86, CW * 0.75, 80);
+  doc.setDrawColor(220, 230, 245); doc.line(ML, 175, PW - MR, 175);
+  doc.setFont('helvetica', 'italic'); doc.setFontSize(8); doc.setTextColor(154, 181, 204);
+  doc.text(ltx('Documento gerado pelo TapControl Manager · Engetap'), PW/2, 180, { align: 'center' });
+  doc.text(ltx('Data: ' + new Date().toLocaleDateString('pt-BR')), PW/2, 185, { align: 'center' });
+
+  const porEquip = {};
+  itens.forEach(it => {
+    const id = sv(it.id_equipamento) || 'sem_equip';
+    if (!porEquip[id]) porEquip[id] = { tag: sv(it.tag_equipamento), itens: [] };
+    porEquip[id].itens.push(it);
+  });
+  Object.entries(porEquip).forEach(([idEquip, grupo]) => {
+    doc.addPage();
+    let y = 20;
+    doc.setFillColor(13, 27, 42); doc.rect(ML, y, CW, 10, 'F');
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(255, 255, 255);
+    doc.text(ltx(`Equipamento: ${grupo.tag} (${idEquip})`), ML + 4, y + 7);
+    y += 16;
+    const hEquip = addImg(fotosMap.equip.get(idEquip), ML, y, CW / 2, 60);
+    if (hEquip) { doc.setFont('helvetica', 'italic'); doc.setFontSize(7); doc.setTextColor(74, 104, 130); doc.text(ltx('Foto do local de instalação'), ML, y + hEquip + 3); y += hEquip + 8; }
+    doc.setFillColor(220, 230, 245); doc.rect(ML, y, CW, 6, 'F');
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5); doc.setTextColor(13, 27, 42);
+    doc.text('Descrição', ML + 2, y + 4); doc.text('Tipo', ML + 80, y + 4); doc.text('Qtd', ML + 122, y + 4); doc.text('Status', ML + 138, y + 4);
+    y += 8;
+    grupo.itens.forEach(it => {
+      if (y > PH - 35) { doc.addPage(); y = 20; }
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(7.2); doc.setTextColor(13, 27, 42);
+      const desc = doc.splitTextToSize(ltx(sv(it.descricao_curta || it.descricao)), 74);
+      doc.text(desc, ML + 2, y); doc.text(ltx(sv(it.tipo_acessorio)), ML + 80, y); doc.text(sv(it.quantidade || 1), ML + 122, y); doc.text(ltx(sv(it.status)), ML + 138, y);
+      y += Math.max(8, desc.length * 4);
+      const tipoKey = sv(it.tipo || it.tipo_acessorio_key || it.tipo_acessorio).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '_');
+      const fotoPonto = fotosMap.ponto.get(idEquip + '_' + tipoKey);
+      if (fotoPonto) {
+        const hPonto = addImg(fotoPonto, ML, y, 60, 40);
+        if (hPonto) { doc.setFont('helvetica', 'italic'); doc.setFontSize(6.5); doc.setTextColor(74, 104, 130); doc.text(ltx('Ponto: ' + sv(it.tipo_acessorio)), ML, y + hPonto + 2); y += hPonto + 6; }
+      }
+    });
+    doc.setFont('helvetica', 'italic'); doc.setFontSize(7); doc.setTextColor(154, 181, 204);
+    doc.text(ltx(`OS: ${sv(lev.numero_os || lev.id_os)} · Lev: ${sv(lev.id_levantamento)} · Equip: ${idEquip}`), PW/2, PH - 8, { align: 'center' });
+  });
+  const nomeArq = `Engetap_NR13_${sv(lev.numero_os || lev.id_os)}_${new Date().toISOString().substring(0, 10)}.pdf`;
+  doc.save(nomeArq);
+  showToast('✅ PDF gerado: ' + nomeArq);
+}
 
 function setView(id, el) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
@@ -4664,6 +4859,7 @@ function setView(id, el) {
   if (id === 'catalogo') renderCatalogo();
   if (id === 'kits') renderKits();
   if (id === 'levantamentos') { syncLevantamentos().then(renderLevantamentos); }
+  if (id === 'fotos') { carregarViewFotos(); }
   if (id === 'dashboard') { renderDashboard(); }
   if (id === 'pipeline') { populatePipeOSFilter(); renderPipeline(); }
   if (id === 'calibracao') { renderCalibracao(); }
